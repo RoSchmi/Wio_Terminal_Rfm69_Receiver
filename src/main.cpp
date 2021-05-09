@@ -15,10 +15,10 @@
 // *********** IMPORTANT SETTINGS - YOU MUST CHANGE/CONFIGURE TO FIT YOUR HARDWARE *************
 //*********************************************************************************************
 
-#define NETWORKID                100  //the same on all nodes that talk to each other
-#define NODEID                   1    // The unique identifier of this node
-#define CURRENT_TEMP_SENDER_ID   2    // The node which sends current and temperature states
-#define SOLARPUMP_SENDER_ID      3    // The node which sends state changes of the solar pump
+#define NETWORKID                   100  //the same on all nodes that talk to each other
+#define NODEID                      1    // The unique identifier of this node
+#define SOLARPUMP_CURRENT_SENDER_ID 2    // The node which sends current and temperature states
+#define SOLAR_TEMP_SENDER_ID        3    // The node which sends state changes of the solar pump
 //#define RECEIVER      3    // The recipient of packets (of the test-node)
 
 //Match frequency to the hardware version of the radio on your Feather
@@ -98,11 +98,11 @@ void loop() {
     uint16_t senderID = rfm69.SENDERID;
     char cmdChar = (char)receivedData[4];
 
-    uint32_t current = 0;
-    uint32_t power = 0;
-    uint32_t work = 0;
-    uint16_t workLower = 0;
-    uint16_t workHigher = 0;
+    uint32_t sensor_1 = 0;
+    uint32_t sensor_2 = 0;
+    uint32_t sensor_3 = 0;
+    uint16_t sensor_3_Lower = 0;
+    uint16_t sensor_3_Higher = 0;
 
 
 
@@ -149,44 +149,76 @@ void loop() {
                     }
                     
                     char oldChar = receivedData[6];
+
+                    sensor_1 = (uint32_t)((uint32_t)receivedData[16] | (uint32_t)receivedData[15] << 8 | (uint32_t)receivedData[14] << 16 | (uint32_t)receivedData[13] << 24);                   
+                    sensor_2 = (uint32_t)((uint32_t)receivedData[21] | (uint32_t)receivedData[20] << 8 | (uint32_t)receivedData[19] << 16 | (uint32_t)receivedData[18] << 24);                                        
+                    sensor_3 = (uint32_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8 | (uint32_t)receivedData[24] << 16 | (uint32_t)receivedData[23] << 24);
+                    sensor_3_Lower = (uint16_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8);
+                    sensor_3_Higher = (uint16_t)((uint32_t)receivedData[24] | (uint32_t)receivedData[23] << 8);
                    
                     switch (senderID)
                     {
-                        case CURRENT_TEMP_SENDER_ID :    
+                        case SOLARPUMP_CURRENT_SENDER_ID :    
                         {
-                          current = (uint32_t)((uint32_t)receivedData[16] | (uint32_t)receivedData[15] << 8 | (uint32_t)receivedData[14] << 16 | (uint32_t)receivedData[13] << 24);                   
-                          power = (uint32_t)((uint32_t)receivedData[21] | (uint32_t)receivedData[20] << 8 | (uint32_t)receivedData[19] << 16 | (uint32_t)receivedData[18] << 24);                                        
-                          work = (uint32_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8 | (uint32_t)receivedData[24] << 16 | (uint32_t)receivedData[23] << 24);
-                          workLower = (uint16_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8);
-                          workHigher = (uint16_t)((uint32_t)receivedData[24] | (uint32_t)receivedData[23] << 8);
+                          
                           switch (cmdChar)
                           {
-                            case '2':             // came from current sensor
+                            case '0':             // comes from solar pump
+                            case '1':
                             {
-                              Serial.printf("Current: %d \r\n", current);
-                              Serial.printf("Power: %d \r\n", power);
+                                Serial.println("SolarPump event Sendr Id 2");
+                                break;
+                            }
+
+                            case '2':             // comes from current sensor
+                            {
+
+                              float currentInFloat = ((float)sensor_1 / 100);
+                              String currentInString = String(currentInFloat, 2);
+                              Serial.print("Current: ");
+                              Serial.println(currentInString);
+
+                              //Serial.printf("Current: %d \r\n", sensor_1);
+                              float powerInFloat = ((float)sensor_2 / 100);
+                              String powerInString = String(powerInFloat, 2);
+                              Serial.print("Power: ");
+                              Serial.println(powerInString);
+                            
                                // convert to float
-                              int16_2_float_function_result workInFloat = reform_uint16_2_float32(workHigher, workLower);
+                              int16_2_float_function_result workInFloat = reform_uint16_2_float32(sensor_3_Higher, sensor_3_Lower);
                               Serial.print("Work: ");       
-                              Serial.println(workInFloat.value);
+                              Serial.println(workInFloat.value, 2);
 
                               break;
-                            }
+                            }                                                      
+                          }
+                          break;
+                        }
+                        case SOLAR_TEMP_SENDER_ID :    
+                        {
+                          switch (cmdChar)
+                          {                          
                             case '3':           // came from temp sensors
                             {
-                              Serial.printf("Collector: %d \r\n", current);
-                              Serial.printf("Storage: %d \r\n", power);
-                               // convert to float
-                              int16_2_float_function_result workInFloat = reform_uint16_2_float32(workHigher, workLower);
-                              Serial.print("Water: ");       
-                              Serial.println(workInFloat.value);
+                              float collector_float = (float)(((float)sensor_1 / 10) - 70);
+                              String collectorInString = String(collector_float, 2);
+                              Serial.print("Collector: ");
+                              Serial.println(collectorInString);
+                              //Serial.printf("Collector: %d \r\n", (int)collector_float);
 
+                              float storage_float = (float)(((float)sensor_2 / 10) - 70);
+                              Serial.printf("Storage: %d \r\n", (int)storage_float);
 
-
+                              float water_float = (float)(((float)sensor_3 / 10) - 70);
+                              Serial.printf("Water: %d \r\n", (int)water_float);
+                                                           
                               break;
                             }
+                            
                           }
+
                         }
+                        break;
                     }
                                                       
                     if (cmdChar == '0' || cmdChar == '1')      // Comes from Pump on/off sensor
