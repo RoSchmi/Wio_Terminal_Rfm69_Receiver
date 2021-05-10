@@ -7,4 +7,8 @@
 
 #define ENCRYPTKEY       "mysecretkeyxxxxx" //exactly the same 16 characters/bytes on all nodes!
 
+// Wifi
+#define IOT_CONFIG_WIFI_SSID            "mySSID"
+#define IOT_CONFIG_WIFI_PASSWORD        "myKey"
+
 #endif // _CONFIG_SECRET_H

@@ -12,10 +12,10 @@
 //
 
 
-#define ANALOG_SENSOR_01_LABEL "Temperature"    // Labels for sensors to be displayed on Wio Terminal screen (length max 13)
-#define ANALOG_SENSOR_02_LABEL "Humidity"       
-#define ANALOG_SENSOR_03_LABEL "Light"
-#define ANALOG_SENSOR_04_LABEL "Movement"
+#define ANALOG_SENSOR_01_LABEL "Ampere"    // Labels for sensors to be displayed on Wio Terminal screen (length max 13)
+#define ANALOG_SENSOR_02_LABEL "Watt"       
+#define ANALOG_SENSOR_03_LABEL "KiloWattStd"
+#define ANALOG_SENSOR_04_LABEL "KiloWattStd"
 
 #define INVALIDATEINTERVAL_MINUTES 10   // Invalidateinterval in minutes 
                                         // (limited to values between 1 - 60)
@@ -27,7 +27,7 @@
 
                                    
 
-#define WORK_WITH_WATCHDOG 1             // 1 = yes, 0 = no, Watchdog is used (1) or not used (0)
+#define WORK_WITH_WATCHDOG 0            // 1 = yes, 0 = no, Watchdog is used (1) or not used (0)
 
 
 

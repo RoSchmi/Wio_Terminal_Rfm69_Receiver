@@ -5,11 +5,31 @@
 //File: Wio_Terminal_Rfm69_Receiver
 
 #include <Arduino.h>
+#include <time.h>
+#include "DateTime.h"
+#include "rpcWiFi.h"
+
+
+#include "SAMCrashMonitor.h"
+
+//#include "NTPClient_Generic.h"
+//#include "Timezone_Generic.h"
+
+#include "SysTime.h"
+#include "TimeFuncs/Rs_TimeZoneHelper.h"
+//#include "TimeFuncs/Rs_time_helpers.h"
+
+
+
 #include "RFM69.h"
 #include "RFM69registers.h"
 #include "Reform_uint16_2_float32.h"
 #include "config_secret.h"
 #include "config.h"
+#include "PowerVM.h"
+
+#include "TFT_eSPI.h"
+#include "Free_Fonts.h"
 
 //*********************************************************************************************
 // *********** IMPORTANT SETTINGS - YOU MUST CHANGE/CONFIGURE TO FIT YOUR HARDWARE *************
@@ -45,33 +65,366 @@ volatile int lastPacketNum_3 = 0;
 
 RFM69 rfm69(RF69_SPI_CS, RF69_IRQ_PIN, IS_RFM69HCW);
 
-//RFM69::RFM69(uint8_t slaveSelectPin, uint8_t interruptPin, bool isRFM69HW, SPIClass *spi)
+PowerVM powerVM;
+
+TFT_eSPI tft;
+int current_text_line = 0;
+
+#define LCD_WIDTH 320
+#define LCD_HEIGHT 240
+#define LCD_FONT FreeSans9pt7b
+#define LCD_LINE_HEIGHT 18
+
+const GFXfont *textFont = FSSB9;
+
+uint32_t screenColor = TFT_BLUE;
+uint32_t backColor = TFT_WHITE;
+uint32_t textColor = TFT_BLACK;
+
+bool showPowerScreen = true;
+
+uint32_t ntpUpdateInterval = 60000;
+
+char timeServer[] = "pool.ntp.org"; // external NTP server e.g. better pool.ntp.org
+unsigned int localPort = 2390;      // local port to listen for UDP packets
+
+const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
+
+byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
+
+uint8_t lastResetCause = -1;
+
+const int timeZoneOffset = (int)TIMEZONEOFFSET;
+const int dstOffset = (int)DSTOFFSET;
+
+
+unsigned long utcTime;
+
+
+DateTime dateTimeUTCNow;    // Seconds since 2000-01-01 08:00:00
+
+
+
+const char *ssid = IOT_CONFIG_WIFI_SSID;
+const char *password = IOT_CONFIG_WIFI_PASSWORD;
+
+// must be static !!
+static SysTime sysTime;
+
+
+Rs_TimeZoneHelper timeZoneHelper;
+
+
+
+Timezone myTimezone; 
+
+
+
+WiFiUDP udp;
+
+
+
+
+
+
+
+// Array to retrieve spaces with different length
+char PROGMEM spacesArray[13][13] = {  "", 
+                                      " ", 
+                                      "  ", 
+                                      "   ", 
+                                      "    ", 
+                                      "     ", 
+                                      "      ", 
+                                      "       ", 
+                                      "        ", 
+                                      "         ", 
+                                      "          ", 
+                                      "           ",  
+                                      "            "};
+
+
+// Routine to send messages to the display
+void lcd_log_line(char* line) 
+{  
+  tft.setTextColor(textColor);
+  tft.setFreeFont(textFont);
+  tft.fillRect(0, current_text_line * LCD_LINE_HEIGHT, 320, LCD_LINE_HEIGHT, backColor);
+  tft.drawString(line, 5, current_text_line * LCD_LINE_HEIGHT);
+  current_text_line++;
+  current_text_line %= ((LCD_HEIGHT-20)/LCD_LINE_HEIGHT);
+  if (current_text_line == 0) 
+  {
+    tft.fillScreen(screenColor);
+  }
+}
 
 // forward declarations
 
-//float Convert(uint16_t pU1, uint16_t pU2);
-
-
+unsigned long getNTPtime();
+unsigned long sendNTPpacket(const char* address);
 int16_2_float_function_result reform_uint16_2_float32(uint16_t u1, uint16_t u2);
+int getDayNum(const char * day);
+int getMonNum(const char * month);
+int getWeekOfMonthNum(const char * weekOfMonth);
+void showDisplayFrame();
+void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool sendResultState, uint32_t tryUpLoadCtr);
+
+
+
 
 
 void setup() {
-  Serial.begin(115200);
-  while(!Serial);
-  Serial.println("Starting...");
+  tft.begin();
+  tft.setRotation(3);
+  tft.fillScreen(screenColor);
+  tft.setFreeFont(&LCD_FONT);
+  tft.setTextColor(TFT_BLACK);
 
-// Hard Reset the RFM module
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(WIO_5S_PRESS, INPUT_PULLUP);
+
+  // Hard Reset the RFM module
   pinMode(RFM69_RST, OUTPUT);   // Wio Terminal: 3
   digitalWrite(RFM69_RST, HIGH);  
   delay(100);
   digitalWrite(RFM69_RST, LOW);
   delay(100);
 
-  uint32_t startTime = millis();     // wait 3000 ms
-  while(millis() - startTime < 3000)
+
+  Serial.begin(115200);
+  while(!Serial);
+  Serial.println("Starting...");
+
+  lcd_log_line((char *)"Start - Disable watchdog.");
+  SAMCrashMonitor::begin();
+
+  // Get last ResetCause
+  // Ext. Reset: 16
+  // WatchDog:   32
+  // BySystem:   64
+  lastResetCause = SAMCrashMonitor::getResetCause();
+  lcd_log_line((char *)SAMCrashMonitor::getResetDescription().c_str());
+  SAMCrashMonitor::dump();
+  SAMCrashMonitor::disableWatchdog();
+
+  // Logging can be activated here:
+  // Seeed_Arduino_rpcUnified/src/rpc_unified_log.h:
+  // ( https://forum.seeedstudio.com/t/rpcwifi-library-only-working-intermittently/255660/5 )
+
+// buffer to hold messages for display
+  char buf[100];
+  
+  sprintf(buf, "RTL8720 Firmware: %s", rpc_system_version());
+  lcd_log_line(buf);
+  sprintf(buf, "Initial WiFi-Status: %i", (int)WiFi.status());
+  lcd_log_line(buf);
+
+  // Setting Daylightsavingtime. Enter values for your zone in file include/config.h
+  // Program aborts in some cases of invalid values
+  
+  int dstWeekday = getDayNum(DST_START_WEEKDAY);
+  int dstMonth = getMonNum(DST_START_MONTH);
+  int dstWeekOfMonth = getWeekOfMonthNum(DST_START_WEEK_OF_MONTH);
+
+  TimeChangeRule dstStart {DST_ON_NAME, (uint8_t)dstWeekOfMonth, (uint8_t)dstWeekday, (uint8_t)dstMonth, DST_START_HOUR, TIMEZONEOFFSET + DSTOFFSET};
+  
+  bool firstTimeZoneDef_is_Valid = (dstWeekday == -1 || dstMonth == - 1 || dstWeekOfMonth == -1 || DST_START_HOUR > 23 ? true : DST_START_HOUR < 0 ? true : false) ? false : true;
+  
+  dstWeekday = getDayNum(DST_STOP_WEEKDAY);
+  dstMonth = getMonNum(DST_STOP_MONTH) + 1;
+  dstWeekOfMonth = getWeekOfMonthNum(DST_STOP_WEEK_OF_MONTH);
+
+  TimeChangeRule stdStart {DST_OFF_NAME, (uint8_t)dstWeekOfMonth, (uint8_t)dstWeekday, (uint8_t)dstMonth, (uint8_t)DST_START_HOUR, (int)TIMEZONEOFFSET};
+
+  bool secondTimeZoneDef_is_Valid = (dstWeekday == -1 || dstMonth == - 1 || dstWeekOfMonth == -1 || DST_STOP_HOUR > 23 ? true : DST_STOP_HOUR < 0 ? true : false) ? false : true;
+  
+  if (firstTimeZoneDef_is_Valid && secondTimeZoneDef_is_Valid)
   {
-    delay(10);
+    myTimezone.setRules(dstStart, stdStart);
   }
+  else
+  {
+    // If timezonesettings are not valid: -> take UTC and wait for ever  
+    TimeChangeRule stdStart {DST_OFF_NAME, (uint8_t)dstWeekOfMonth, (uint8_t)dstWeekday, (uint8_t)dstMonth, (uint8_t)DST_START_HOUR, (int)0};
+    myTimezone.setRules(stdStart, stdStart);
+    while (true)
+    {
+      Serial.println("Invalid DST Timezonesettings");
+      delay(5000);
+    }
+  }
+
+  //******************************************************
+  
+   //Set WiFi to station mode and disconnect from an AP if it was previously connected
+  WiFi.mode(WIFI_STA);
+  lcd_log_line((char *)"First disconnecting.");
+  while (WiFi.status() != WL_DISCONNECTED)
+  {
+    WiFi.disconnect();
+    delay(200); 
+  }
+  
+  sprintf(buf, "Status: %i", (int)WiFi.status());
+  lcd_log_line(buf);
+  
+  delay(500);
+
+  sprintf(buf, "Connecting to SSID: %s", ssid);
+  lcd_log_line(buf);
+
+  if (!ssid || *ssid == 0x00 || strlen(ssid) > 31)
+  {
+    lcd_log_line((char *)"Invalid: SSID or PWD, Stop");
+    // Stay in endless loop
+      while (true)
+      {         
+        delay(1000);
+      }
+  }
+
+#if USE_WIFI_STATIC_IP == 1
+  IPAddress presetIp(192, 168, 1, 83);
+  IPAddress presetGateWay(192, 168, 1, 1);
+  IPAddress presetSubnet(255, 255, 255, 0);
+  IPAddress presetDnsServer1(8,8,8,8);
+  IPAddress presetDnsServer2(8,8,4,4);
+#endif
+
+WiFi.begin(ssid, password);
+ 
+if (!WiFi.enableSTA(true))
+{
+  #if WORK_WITH_WATCHDOG == 1   
+    __unused int timeout = SAMCrashMonitor::enableWatchdog(4000);
+  #endif
+
+  while (true)
+  {
+    // Stay in endless loop to reboot through Watchdog
+    lcd_log_line((char *)"Connect failed.");
+    delay(1000);
+    }
+}
+
+#if USE_WIFI_STATIC_IP == 1
+  if (!WiFi.config(presetIp, presetGateWay, presetSubnet, presetDnsServer1, presetDnsServer2))
+  {
+    while (true)
+    {
+      // Stay in endless loop
+    lcd_log_line((char *)"WiFi-Config failed");
+      delay(3000);
+    }
+  }
+  else
+  {
+    lcd_log_line((char *)"WiFi-Config successful");
+    delay(1000);
+  }
+  #endif
+
+  while (WiFi.status() != WL_CONNECTED)
+  {  
+    delay(1000);
+    lcd_log_line(itoa((int)WiFi.status(), buf, 10));
+    WiFi.begin(ssid, password);
+  }
+
+  lcd_log_line((char *)"Connected, new Status:");
+  lcd_log_line(itoa((int)WiFi.status(), buf, 10));
+
+  #if WORK_WITH_WATCHDOG == 1
+    
+    Serial.println(F("Enabling watchdog."));
+    int timeout = SAMCrashMonitor::enableWatchdog(4000);
+    sprintf(buf, "Watchdog enabled: %i %s", timeout, "ms");
+    lcd_log_line(buf);
+  #endif
+  
+  IPAddress localIpAddress = WiFi.localIP();
+  IPAddress gatewayIp =  WiFi.gatewayIP();
+  IPAddress subNetMask =  WiFi.subnetMask();
+  IPAddress dnsServerIp = WiFi.dnsIP();
+   
+// Wait for 1500 ms
+  for (int i = 0; i < 4; i++)
+  {
+    delay(500);
+    #if WORK_WITH_WATCHDOG == 1
+      SAMCrashMonitor::iAmAlive();
+    #endif
+  }
+  
+  current_text_line = 0;
+  tft.fillScreen(screenColor);
+    
+  lcd_log_line((char *)"> SUCCESS.");
+  sprintf(buf, "Ip: %s", (char*)localIpAddress.toString().c_str());
+  lcd_log_line(buf);
+  sprintf(buf, "Gateway: %s", (char*)gatewayIp.toString().c_str());
+  lcd_log_line(buf);
+  sprintf(buf, "Subnet: %s", (char*)subNetMask.toString().c_str());
+  lcd_log_line(buf);
+  sprintf(buf, "DNS-Server: %s", (char*)dnsServerIp.toString().c_str());
+  lcd_log_line(buf);
+  
+  
+  ntpUpdateInterval =  (NTP_UPDATE_INTERVAL_MINUTES < 1 ? 1 : NTP_UPDATE_INTERVAL_MINUTES) * 60 * 1000;
+
+#if WORK_WITH_WATCHDOG == 1
+    SAMCrashMonitor::iAmAlive();
+  #endif
+
+  int getTimeCtr = 0; 
+  utcTime = getNTPtime();
+  while ((getTimeCtr < 5) && utcTime == 0)
+  {   
+      getTimeCtr++;
+      utcTime = getNTPtime();
+  }
+
+  #if WORK_WITH_WATCHDOG == 1
+    SAMCrashMonitor::iAmAlive();
+  #endif
+
+  if (utcTime != 0 )
+  {
+    sysTime.begin(utcTime);
+    dateTimeUTCNow = utcTime;
+  }
+  else
+  {
+    lcd_log_line((char *)"Failed get network time");
+    delay(10000);
+    // do something, evtl. reboot
+    while (true)
+    {
+      delay(100);
+    }   
+  }
+  
+  dateTimeUTCNow = sysTime.getTime();
+  
+  // RoSchmi for DST tests
+  // dateTimeUTCNow = DateTime(2021, 10, 31, 1, 1, 0);
+
+  sprintf(buf, "%s-%i-%i-%i %i:%i", (char *)"UTC-Time is  :", dateTimeUTCNow.year(), 
+                                        dateTimeUTCNow.month() , dateTimeUTCNow.day(),
+                                        dateTimeUTCNow.hour() , dateTimeUTCNow.minute());
+  Serial.println(buf);                            
+  lcd_log_line(buf);
+  
+  
+  DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
+  
+  sprintf(buf, "%s-%i-%i-%i %i:%i", (char *)"Local-Time is:", localTime.year(), 
+                                        localTime.month() , localTime.day(),
+                                        localTime.hour() , localTime.minute());
+  Serial.println(buf);
+  lcd_log_line(buf);
+
   Serial.println("Initializing Rfm69...");
 
   bool initResult = rfm69.initialize(RF69_433MHZ, NODEID, NETWORKID);
@@ -84,6 +437,16 @@ void setup() {
   //encrypt(0);
 
   Serial.printf("Working at %i MHz", FREQUENCY==RF69_433MHZ ? 433 : FREQUENCY==RF69_868MHZ ? 868 : 915);
+
+  showDisplayFrame();
+  //fillDisplayFrame(999.9, 999.9, 999.9, 999.9, false, false, false, false, sendResultState, tryUploadCounter);
+  fillDisplayFrame(999.9, 999.9, 999.9, 999.9, false, false, false, false, true, 1);
+  delay(50);
+
+  //previousNtpUpdateMillis = millis();
+  //previousNtpRequestMillis = millis();
+
+
 }
   
 
@@ -188,6 +551,7 @@ void loop() {
                               int16_2_float_function_result workInFloat = reform_uint16_2_float32(sensor_3_Higher, sensor_3_Lower);
                               Serial.print("Work: ");       
                               Serial.println(workInFloat.value, 2);
+                              fillDisplayFrame(currentInFloat, powerInFloat, workInFloat.value, workInFloat.value, false, false, false, false, false, 2);
 
                               break;
                             }                                                      
@@ -274,5 +638,342 @@ void loop() {
 
   delay (100);
   // put your main code here, to run repeatedly:
+}
+
+/*
+// To manage daylightsavingstime stuff convert input ("Last", "First", "Second", "Third", "Fourth") to int equivalent
+int getWeekOfMonthNum(const char * weekOfMonth)
+{
+  for (int i = 0; i < 5; i++)
+  {  
+    if (strcmp((char *)time_helpers.weekOfMonth[i], weekOfMonth) == 0)
+    {
+      return i;
+    }   
+  }
+  return -1;
+}
+
+int getMonNum(const char * month)
+{
+  for (int i = 0; i < 12; i++)
+  {  
+    if (strcmp((char *)time_helpers.monthsOfTheYear[i], month) == 0)
+    {
+      // RoSchmi
+      return i;
+      //return i + 1;
+    }   
+  }
+  return -1;
+}
+
+int getDayNum(const char * day)
+{
+  for (int i = 0; i < 7; i++)
+  {  
+    if (strcmp((char *)time_helpers.daysOfTheWeek[i], day) == 0)
+    {
+      // RoSchmi
+      return i;
+      //return i + 1;
+    }   
+  }
+  return -1;
+}
+*/
+
+
+
+// To manage daylightsavingstime stuff convert input ("Last", "First", "Second", "Third", "Fourth") to int equivalent
+int getWeekOfMonthNum(const char * weekOfMonth)
+{
+  for (int i = 0; i < 5; i++)
+  {  
+    if (strcmp((char *)timeZoneHelper.weekOfMonth[i], weekOfMonth) == 0)
+    {
+      return i;
+    }   
+  }
+  return -1;
+}
+
+int getMonNum(const char * month)
+{
+  for (int i = 0; i < 12; i++)
+  {  
+    if (strcmp((char *)timeZoneHelper.monthsOfTheYear[i], month) == 0)
+    {
+      return i + 1;
+    }   
+  }
+  return -1;
+}
+
+int getDayNum(const char * day)
+{
+  for (int i = 0; i < 7; i++)
+  {  
+    if (strcmp((char *)timeZoneHelper.daysOfTheWeek[i], day) == 0)
+    {
+      return i + 1;
+    }   
+  }
+  return -1;
+}
+
+unsigned long getNTPtime() 
+{
+    // module returns a unsigned long time valus as secs since Jan 1, 1970 
+    // unix time or 0 if a problem encounted
+    //only send data when connected
+    if (WiFi.status() == WL_CONNECTED) 
+    {
+        //initializes the UDP state
+        //This initializes the transfer buffer
+        udp.begin(WiFi.localIP(), localPort);
+ 
+        sendNTPpacket(timeServer); // send an NTP packet to a time server
+        // wait to see if a reply is available
+     
+        delay(1000);
+        
+        if (udp.parsePacket()) 
+        {
+            // We've received a packet, read the data from it
+            udp.read(packetBuffer, NTP_PACKET_SIZE); // read the packet into the buffer
+ 
+            //the timestamp starts at byte 40 of the received packet and is four bytes,
+            // or two words, long. First, extract the two words:
+ 
+            unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+            unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+            // combine the four bytes (two words) into a long integer
+            // this is NTP time (seconds since Jan 1 1900):
+            unsigned long secsSince1900 = highWord << 16 | lowWord;
+            // Unix time starts on Jan 1 1970. In seconds, that's 2208988800:
+            const unsigned long seventyYears = 2208988800UL;
+            // subtract seventy years:
+            unsigned long epoch = secsSince1900 - seventyYears;
+ 
+            // adjust time for timezone offset in secs +/- from UTC
+            // WA time offset from UTC is +8 hours (28,800 secs)
+            // + East of GMT
+            // - West of GMT
+
+            // RoSchmi: inactivated timezone offset
+            // long tzOffset = 28800UL;
+            long tzOffset = 0UL;
+         
+            unsigned long adjustedTime;
+            return adjustedTime = epoch + tzOffset;
+        }
+        else {
+            // were not able to parse the udp packet successfully
+            // clear down the udp connection
+            udp.stop();
+            return 0; // zero indicates a failure
+        }
+        // not calling ntp time frequently, stop releases resources
+        udp.stop();
+    }
+    else 
+    {
+        // network not connected
+        return 0;
+    }
+ 
+}
+ 
+// send an NTP request to the time server at the given address
+unsigned long sendNTPpacket(const char* address) {
+    // set all bytes in the buffer to 0
+    for (int i = 0; i < NTP_PACKET_SIZE; ++i) {
+        packetBuffer[i] = 0;
+    }
+    // Initialize values needed to form NTP request
+    // (see URL above for details on the packets)
+    packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+    packetBuffer[1] = 0;     // Stratum, or type of clock
+    packetBuffer[2] = 6;     // Polling Interval
+    packetBuffer[3] = 0xEC;  // Peer Clock Precision
+    // 8 bytes of zero for Root Delay & Root Dispersion
+    packetBuffer[12] = 49;
+    packetBuffer[13] = 0x4E;
+    packetBuffer[14] = 49;
+    packetBuffer[15] = 52;
+ 
+    // all NTP fields have been given values, now
+    // you can send a packet requesting a timestamp:
+    udp.beginPacket(address, 123); //NTP requests are to port 123
+    udp.write(packetBuffer, NTP_PACKET_SIZE);
+    udp.endPacket();
+    return 0;
+}
+
+void showDisplayFrame()
+{
+  if(showPowerScreen)
+  {
+    tft.fillScreen(TFT_BLUE);
+    backColor = TFT_LIGHTGREY;
+    textFont = FSSB9;
+    textColor = TFT_BLACK;
+    
+    char line[35]{0};
+    char label_left[15] {0};
+    strncpy(label_left, ANALOG_SENSOR_01_LABEL, 13);
+    char label_right[15] {0};
+    strncpy(label_right, ANALOG_SENSOR_02_LABEL, 13);
+    int32_t gapLength_1 = (13 - strlen(label_left)) / 2;
+    int32_t gapLength_2 = (13 - strlen(label_right)) / 2; 
+    sprintf(line, "%s%s%s%s%s%s%s ", spacesArray[3], spacesArray[(int)(gapLength_1 * 1.7)], label_left, spacesArray[(int)(gapLength_1 * 1.7)], spacesArray[5], spacesArray[(int)(gapLength_2 * 1.7)], label_right);
+    current_text_line = 1;
+    lcd_log_line((char *)line);
+
+    strncpy(label_left, ANALOG_SENSOR_03_LABEL, 13); 
+    strncpy(label_right, ANALOG_SENSOR_04_LABEL, 13);
+    gapLength_1 = (13 - strlen(label_left)) / 2; 
+    gapLength_2 = (13 - strlen(label_right)) / 2;
+    sprintf(line, "%s%s%s%s%s%s%s ", spacesArray[3], spacesArray[(int)(gapLength_1 * 1.7)], label_left, spacesArray[(int)(gapLength_1 * 1.7)], spacesArray[5], spacesArray[(int)(gapLength_2 * 1.7)], label_right);
+    current_text_line = 6;
+    lcd_log_line((char *)line);
+    current_text_line = 10;   
+    line[0] = '\0';   
+    lcd_log_line((char *)line);
+  }
+}
+
+void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool pSendResultState, uint32_t pTryUploadCtr)
+{
+  if (showPowerScreen)
+  {
+    static TFT_eSprite spr = TFT_eSprite(&tft);
+
+    static uint8_t lastDateOutputMinute = 60;
+
+    static uint32_t lastTryUploadCtr = 0;
+
+    static bool lastSendResultState = false;
+    
+    an_1 = constrain(an_1, -999.9, 999.9);
+    an_2 = constrain(an_2, -999.9, 999.9);
+    an_3 = constrain(an_3, -999.9, 999.9);
+    an_4 = constrain(an_4, -999.9, 999.9);
+
+    char lineBuf[40] {0};
+
+    char valueStringArray[4][8] = {{0}, {0}, {0}, {0}};
+    
+    /*
+    sprintf(valueStringArray[0], "%.1f", SENSOR_1_FAHRENHEIT == 1 ?  dht.convertCtoF(an_1) :  an_1 );
+    sprintf(valueStringArray[1], "%.1f", SENSOR_2_FAHRENHEIT == 1 ?  dht.convertCtoF(an_2) :  an_2 );
+    sprintf(valueStringArray[2], "%.1f", SENSOR_3_FAHRENHEIT == 1 ?  dht.convertCtoF(an_3) :  an_3 );
+    sprintf(valueStringArray[3], "%.1f", SENSOR_4_FAHRENHEIT == 1 ?  dht.convertCtoF(an_4) :  an_4 );
+    */
+
+    sprintf(valueStringArray[0], "%.1f", an_1);
+    sprintf(valueStringArray[1], "%.1f", an_2);
+    sprintf(valueStringArray[2], "%.1f", an_3);
+    sprintf(valueStringArray[3], "%.1f", an_4);
+
+    for (int i = 0; i < 4; i++)
+    {
+        // 999.9 is invalid, 1831.8 is invalid when tempatures are expressed in Fahrenheit
+        
+        if (strcmp(valueStringArray[i], "999.9") == 0 || strcmp(valueStringArray[i], "1831.8") == 0)
+        {
+            strcpy(valueStringArray[i], "--.-");
+        }
+        
+    }
+
+    int charCounts[4];
+    charCounts[0] = 6 - strlen(valueStringArray[0]);
+    charCounts[1] = 6 - strlen(valueStringArray[1]);
+    charCounts[2] = 6 - strlen(valueStringArray[2]);
+    charCounts[3] = 6 - strlen(valueStringArray[3]);
+    
+    spr.createSprite(120, 30);
+
+    spr.setTextColor(TFT_ORANGE);
+    spr.setFreeFont(FSSBO18);
+    
+    for (int i = 0; i <4; i++)
+    {
+      spr.fillSprite(TFT_DARKGREEN);
+      sprintf(lineBuf, "%s%s", spacesArray[charCounts[i]], valueStringArray[i]);
+      spr.drawString(lineBuf, 0, 0);
+      switch (i)
+      {
+        case 0: {spr.pushSprite(25, 54); break;}
+        case 1: {spr.pushSprite(160, 54); break;}
+        case 2: {spr.pushSprite(25, 138); break;}
+        case 3: {spr.pushSprite(160, 138); break;}
+      }     
+    }
+    
+    dateTimeUTCNow = sysTime.getTime();
+
+    myTimezone.utcIsDST(dateTimeUTCNow.unixtime());
+
+
+    int timeZoneOffsetUTC = myTimezone.utcIsDST(dateTimeUTCNow.unixtime()) ? TIMEZONEOFFSET + DSTOFFSET : TIMEZONEOFFSET;
+    
+    //time_helpers.update(dateTimeUTCNow);
+    //int timeZoneOffsetUTC = time_helpers.isDST() ? TIMEZONEOFFSET + DSTOFFSET : TIMEZONEOFFSET;
+
+    DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
+    
+    //DateTime localTime = dateTimeUTCNow.operator+(TimeSpan(timeZoneOffsetUTC * 60));
+    
+    //char formattedTime[64] {0};
+
+    //time_helpers.formattedTime(formattedTime, sizeof(formattedTime), (char *)"%d. %b %Y - %A %T");
+
+    char buf[35] = "DDD, DD MMM YYYY hh:mm:ss GMT";
+    
+    localTime.toString(buf);
+  
+    
+    volatile uint8_t actMinute = localTime.minute();
+    if (lastDateOutputMinute != actMinute)
+    {
+      lastDateOutputMinute = actMinute;     
+       current_text_line = 10;
+       sprintf(lineBuf, "%s", (char *)buf);
+
+       lineBuf[strlen(lineBuf) -3] = (char)'\0';
+       lcd_log_line(lineBuf);
+    }
+
+    // Show signal circle on the screen, showing if upload was successfful (green) or not (red)
+    if (pTryUploadCtr != lastTryUploadCtr)    // if new upload try has happened, show actualized signal 
+    {
+        if (pSendResultState)
+        {
+          tft.fillCircle(300, 9, 8, TFT_DARKGREEN);
+          lastSendResultState = true;          
+        }
+        else
+        {
+          tft.fillCircle(300, 9, 8, TFT_RED);
+          lastSendResultState = false;         
+        }       
+        lastTryUploadCtr = pTryUploadCtr;
+    }
+    else                                  // if no upload try --> switch off if it was green before
+    {
+        if (lastSendResultState == true)
+        {
+          tft.fillCircle(300, 9, 8, TFT_BLUE);
+        }
+    }
+  
+    tft.fillRect(16, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_1 ? TFT_RED : TFT_DARKGREY);
+    tft.fillRect(92, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_2 ? TFT_RED : TFT_DARKGREY);
+    tft.fillRect(168, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_3 ? TFT_RED : TFT_DARKGREY);
+    tft.fillRect(244, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_4 ? TFT_RED : TFT_DARKGREY);
+  }
 }
 
