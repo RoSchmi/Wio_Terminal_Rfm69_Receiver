@@ -83,7 +83,26 @@ uint32_t textColor = TFT_BLACK;
 
 bool showPowerScreen = true;
 
+uint32_t loopCounter = 0;
+
+
+uint32_t timeNtpUpdateCounter = 0;
+int32_t sysTimeNtpDelta = 0;
 uint32_t ntpUpdateInterval = 60000;
+uint32_t lastDateOutputMinute = 60;
+uint32_t previousDisplayTimeUpdateMillis = 0;
+uint32_t previousNtpUpdateMillis = 0;
+uint32_t previousNtpRequestMillis = 0;
+
+uint32_t actDay = 0;
+
+float workAtStartOfDay = 0;
+
+float powerDayMin = 50000;   // very high value
+float powerDayMax = 0;
+
+DateTime BootTimeUtc = DateTime();
+//TimeSpan Ontime = TimeSpan(0);
 
 char timeServer[] = "pool.ntp.org"; // external NTP server e.g. better pool.ntp.org
 unsigned int localPort = 2390;      // local port to listen for UDP packets
@@ -92,6 +111,8 @@ const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of th
 
 byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
 
+
+bool ledState = false;
 uint8_t lastResetCause = -1;
 
 const int timeZoneOffset = (int)TIMEZONEOFFSET;
@@ -145,7 +166,7 @@ char PROGMEM spacesArray[13][13] = {  "",
 
 
 // Routine to send messages to the display
-void lcd_log_line(char* line) 
+void lcd_log_line(char* line, uint32_t textCol = textColor, uint32_t backCol = backColor, uint32_t screenCol = screenColor) 
 {  
   tft.setTextColor(textColor);
   tft.setFreeFont(textFont);
@@ -167,7 +188,7 @@ int16_2_float_function_result reform_uint16_2_float32(uint16_t u1, uint16_t u2);
 int getDayNum(const char * day);
 int getMonNum(const char * month);
 int getWeekOfMonthNum(const char * weekOfMonth);
-void showDisplayFrame();
+void showDisplayFrame(char * label_01, char * label_02, char * label_03, char * label_04, uint32_t screenCol, uint32_t backCol, uint32_t textCol);
 void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool sendResultState, uint32_t tryUpLoadCtr);
 
 
@@ -193,7 +214,7 @@ void setup() {
 
 
   Serial.begin(115200);
-  while(!Serial);
+  //while(!Serial);
   Serial.println("Starting...");
 
   lcd_log_line((char *)"Start - Disable watchdog.");
@@ -406,6 +427,8 @@ if (!WiFi.enableSTA(true))
   }
   
   dateTimeUTCNow = sysTime.getTime();
+
+  BootTimeUtc = dateTimeUTCNow;
   
   // RoSchmi for DST tests
   // dateTimeUTCNow = DateTime(2021, 10, 31, 1, 1, 0);
@@ -438,13 +461,15 @@ if (!WiFi.enableSTA(true))
 
   Serial.printf("Working at %i MHz", FREQUENCY==RF69_433MHZ ? 433 : FREQUENCY==RF69_868MHZ ? 868 : 915);
 
-  showDisplayFrame();
+  //showDisplayFrame();
+  //showDisplayFrame(ANALOG_SENSOR_01_LABEL, ANALOG_SENSOR_02_LABEL,ANALOG_SENSOR_03_LABEL, ANALOG_SENSOR_04_LABEL, TFT_BLUE, TFT_LIGHTGREY,  TFT_BLACK);
+  showDisplayFrame(ANALOG_SENSOR_01_LABEL, ANALOG_SENSOR_02_LABEL, ANALOG_SENSOR_03_LABEL, ANALOG_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);
   //fillDisplayFrame(999.9, 999.9, 999.9, 999.9, false, false, false, false, sendResultState, tryUploadCounter);
   fillDisplayFrame(999.9, 999.9, 999.9, 999.9, false, false, false, false, true, 1);
   delay(50);
 
-  //previousNtpUpdateMillis = millis();
-  //previousNtpRequestMillis = millis();
+  previousNtpUpdateMillis = millis();
+  previousNtpRequestMillis = millis();
 
 
 }
@@ -467,20 +492,11 @@ void loop() {
     uint16_t sensor_3_Lower = 0;
     uint16_t sensor_3_Higher = 0;
 
-
-
     //print message received to serial
-
-    Serial.print('[');Serial.print(senderID);
-    Serial.println("] ");
-    Serial.println(rfm69.DATALEN);
+    Serial.printf("[%i]\r\n", senderID);
     uint8_t payLoadLen = rfm69.PAYLOADLEN;
     Serial.println(payLoadLen);
     
-    
-
-    Serial.print((char*)receivedData);
-    Serial.println("");
     for (int i = 0; i < payLoadLen; i++)
     {
       Serial.printf("0x%02x ", receivedData[i]);
@@ -496,11 +512,9 @@ void loop() {
     workBuffer[4] = '\0';
     int sendInfo = atoi(workBuffer);
 
-    
-
     int selectedLastPacketNum = (cmdChar == '3') ? lastPacketNum_3 : lastPacketNum;
                 
-                if (actPacketNum != selectedLastPacketNum)
+                if (actPacketNum != selectedLastPacketNum)   // neglect double sended meesages
                 {
                     if (cmdChar == '3')
                     {
@@ -513,7 +527,7 @@ void loop() {
                     
                     char oldChar = receivedData[6];
 
-                    sensor_1 = (uint32_t)((uint32_t)receivedData[16] | (uint32_t)receivedData[15] << 8 | (uint32_t)receivedData[14] << 16 | (uint32_t)receivedData[13] << 24);                   
+                    sensor_1 = (uint32_t)((uint32_t)receivedData[16] | (uint32_t)receivedData[15] << 8 | (uint32_t)receivedData[14] << 16 | (uint32_t)receivedData[13] << 24);
                     sensor_2 = (uint32_t)((uint32_t)receivedData[21] | (uint32_t)receivedData[20] << 8 | (uint32_t)receivedData[19] << 16 | (uint32_t)receivedData[18] << 24);                                        
                     sensor_3 = (uint32_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8 | (uint32_t)receivedData[24] << 16 | (uint32_t)receivedData[23] << 24);
                     sensor_3_Lower = (uint16_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8);
@@ -541,7 +555,6 @@ void loop() {
                               Serial.print("Current: ");
                               Serial.println(currentInString);
 
-                              //Serial.printf("Current: %d \r\n", sensor_1);
                               float powerInFloat = ((float)sensor_2 / 100);
                               String powerInString = String(powerInFloat, 2);
                               Serial.print("Power: ");
@@ -551,7 +564,21 @@ void loop() {
                               int16_2_float_function_result workInFloat = reform_uint16_2_float32(sensor_3_Higher, sensor_3_Lower);
                               Serial.print("Work: ");       
                               Serial.println(workInFloat.value, 2);
-                              fillDisplayFrame(currentInFloat, powerInFloat, workInFloat.value, workInFloat.value, false, false, false, false, false, 2);
+                              dateTimeUTCNow = sysTime.getTime();
+                              DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
+                              if (localTime.day() != actDay)
+                              {
+                                actDay = localTime.day();
+                                powerDayMin = 50000;   // very high value
+                                powerDayMax = 0;
+                                workAtStartOfDay = workAtStartOfDay < 0.0001 ? workInFloat.value : workAtStartOfDay;
+                              }
+                              powerDayMin = powerInFloat < powerDayMin ? powerInFloat : powerDayMin;
+                              powerDayMax = powerInFloat > powerDayMax ? powerInFloat : powerDayMax;
+                              
+                              
+
+                              fillDisplayFrame(powerInFloat, workInFloat.value - workAtStartOfDay, powerDayMin, powerDayMax, false, false, false, false, true, 0);
 
                               break;
                             }                                                      
@@ -636,53 +663,80 @@ void loop() {
   rfm69.receiveDone(); //put radio in RX mode
   Serial.flush(); //make sure all serial data is clocked out before sleeping the MCU
 
-  delay (100);
-  // put your main code here, to run repeatedly:
-}
+  //********   End of Rfm69 stuff   **************
 
-/*
-// To manage daylightsavingstime stuff convert input ("Last", "First", "Second", "Third", "Fourth") to int equivalent
-int getWeekOfMonthNum(const char * weekOfMonth)
-{
-  for (int i = 0; i < 5; i++)
-  {  
-    if (strcmp((char *)time_helpers.weekOfMonth[i], weekOfMonth) == 0)
-    {
-      return i;
-    }   
-  }
-  return -1;
-}
+  //delay (100);
 
-int getMonNum(const char * month)
-{
-  for (int i = 0; i < 12; i++)
-  {  
-    if (strcmp((char *)time_helpers.monthsOfTheYear[i], month) == 0)
-    {
-      // RoSchmi
-      return i;
-      //return i + 1;
-    }   
-  }
-  return -1;
-}
+  if (loopCounter++ % 10000 == 0)   // Do other things only every 10000 th round and toggle Led to signal that App is running
+  {
+    ledState = !ledState;
+    digitalWrite(LED_BUILTIN, ledState);
 
-int getDayNum(const char * day)
-{
-  for (int i = 0; i < 7; i++)
-  {  
-    if (strcmp((char *)time_helpers.daysOfTheWeek[i], day) == 0)
-    {
-      // RoSchmi
-      return i;
-      //return i + 1;
-    }   
-  }
-  return -1;
-}
-*/
+    #if WORK_WITH_WATCHDOG == 1
+      SAMCrashMonitor::iAmAlive();
+    #endif
 
+    
+    // Update RTC from Ntp when ntpUpdateInterval has expired, retry after 20 sec if update was not successful
+    if (((millis() - previousNtpUpdateMillis) >= ntpUpdateInterval) && ((millis() - previousNtpRequestMillis) >= 20000))  
+    {      
+        dateTimeUTCNow = sysTime.getTime();
+        uint32_t actRtcTime = dateTimeUTCNow.secondstime();
+
+        int loopCtr = 0;
+        unsigned long  utcNtpTime = getNTPtime();   // Get NTP time, try up to 4 times        
+        while ((loopCtr < 4) && utcTime == 0)
+        {
+          loopCtr++;
+          utcTime = getNTPtime();
+        }
+
+        previousNtpRequestMillis = millis();
+        
+        if (utcNtpTime != 0 )       // if NTP request was successful --> synchronize RTC 
+        {  
+            previousNtpUpdateMillis = millis();     
+            dateTimeUTCNow = utcNtpTime;
+            sysTimeNtpDelta = actRtcTime - dateTimeUTCNow.secondstime();
+            
+            sysTime.setTime(dateTimeUTCNow);
+            timeNtpUpdateCounter++;   
+        }  
+      }
+      else            // it was not NTP Update, proceed with send to analog table or On/Off-table
+      {
+        dateTimeUTCNow = sysTime.getTime();
+      }
+
+      if (millis() - previousDisplayTimeUpdateMillis > 1000)
+      {
+        DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
+    
+        char buf[35] = "DDD, DD MMM hh:mm:ss";
+        char lineBuf[40] {0};
+    
+        localTime.toString(buf);
+  
+    
+        uint8_t actMinute = localTime.minute();
+        if (lastDateOutputMinute != actMinute)
+        {
+          lastDateOutputMinute = actMinute;
+          TimeSpan onTime = dateTimeUTCNow.operator-(BootTimeUtc);
+          buf[strlen(buf) - 3] =  (char)'\0';       
+          current_text_line = 10;
+          sprintf(lineBuf, "%s  On: %d:%02d:%02d", buf, onTime.days(), onTime.hours(), onTime.minutes());
+
+          //lineBuf[strlen(lineBuf) -3] = (char)'\0';
+          lcd_log_line(lineBuf);
+        }
+      }
+
+
+
+
+  }// put your main code here, to run repeatedly:
+}
 
 
 // To manage daylightsavingstime stuff convert input ("Last", "First", "Second", "Third", "Fourth") to int equivalent
@@ -811,36 +865,42 @@ unsigned long sendNTPpacket(const char* address) {
     return 0;
 }
 
-void showDisplayFrame()
+void showDisplayFrame(char * label_01, char * label_02, char * label_03, char * label_04, uint32_t screenCol, uint32_t backCol, uint32_t textCol)
 {
   if(showPowerScreen)
   {
-    tft.fillScreen(TFT_BLUE);
-    backColor = TFT_LIGHTGREY;
+    //tft.fillScreen(TFT_BLUE);
+    tft.fillScreen(screenCol);
+
+    //backColor = TFT_LIGHTGREY;
+    backColor = backCol;
+
     textFont = FSSB9;
-    textColor = TFT_BLACK;
+    //textColor = TFT_BLACK;
+    textColor = textCol;
     
     char line[35]{0};
     char label_left[15] {0};
-    strncpy(label_left, ANALOG_SENSOR_01_LABEL, 13);
+    //strncpy(label_left, ANALOG_SENSOR_01_LABEL, 13);
+    strncpy(label_left, label_01, 13);
     char label_right[15] {0};
-    strncpy(label_right, ANALOG_SENSOR_02_LABEL, 13);
+    strncpy(label_right, label_02, 13);
     int32_t gapLength_1 = (13 - strlen(label_left)) / 2;
     int32_t gapLength_2 = (13 - strlen(label_right)) / 2; 
     sprintf(line, "%s%s%s%s%s%s%s ", spacesArray[3], spacesArray[(int)(gapLength_1 * 1.7)], label_left, spacesArray[(int)(gapLength_1 * 1.7)], spacesArray[5], spacesArray[(int)(gapLength_2 * 1.7)], label_right);
     current_text_line = 1;
-    lcd_log_line((char *)line);
+    lcd_log_line((char *)line, textColor, backColor, screenColor);
 
-    strncpy(label_left, ANALOG_SENSOR_03_LABEL, 13); 
-    strncpy(label_right, ANALOG_SENSOR_04_LABEL, 13);
+    strncpy(label_left, label_03, 13); 
+    strncpy(label_right, label_04, 13);
     gapLength_1 = (13 - strlen(label_left)) / 2; 
     gapLength_2 = (13 - strlen(label_right)) / 2;
     sprintf(line, "%s%s%s%s%s%s%s ", spacesArray[3], spacesArray[(int)(gapLength_1 * 1.7)], label_left, spacesArray[(int)(gapLength_1 * 1.7)], spacesArray[5], spacesArray[(int)(gapLength_2 * 1.7)], label_right);
     current_text_line = 6;
-    lcd_log_line((char *)line);
+    lcd_log_line((char *)line, textColor, backColor, screenColor);
     current_text_line = 10;   
     line[0] = '\0';   
-    lcd_log_line((char *)line);
+    lcd_log_line((char *)line, textColor, backColor, screenColor);
   }
 }
 
@@ -856,10 +916,10 @@ void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool o
 
     static bool lastSendResultState = false;
     
-    an_1 = constrain(an_1, -999.9, 999.9);
-    an_2 = constrain(an_2, -999.9, 999.9);
-    an_3 = constrain(an_3, -999.9, 999.9);
-    an_4 = constrain(an_4, -999.9, 999.9);
+    an_1 = constrain(an_1, -999.9, 50000.0);
+    an_2 = constrain(an_2, -999.9, 50000.0);
+    an_3 = constrain(an_3, -999.9, 50000.0);
+    an_4 = constrain(an_4, -999.9, 50000.0);
 
     char lineBuf[40] {0};
 
@@ -873,7 +933,7 @@ void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool o
     */
 
     sprintf(valueStringArray[0], "%.1f", an_1);
-    sprintf(valueStringArray[1], "%.1f", an_2);
+    sprintf(valueStringArray[1], "%.2f", an_2);
     sprintf(valueStringArray[2], "%.1f", an_3);
     sprintf(valueStringArray[3], "%.1f", an_4);
 
@@ -881,7 +941,7 @@ void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool o
     {
         // 999.9 is invalid, 1831.8 is invalid when tempatures are expressed in Fahrenheit
         
-        if (strcmp(valueStringArray[i], "999.9") == 0 || strcmp(valueStringArray[i], "1831.8") == 0)
+        if ( strcmp(valueStringArray[i], "999.9") == 0 || strcmp(valueStringArray[i], "999.90") == 0 || strcmp(valueStringArray[i], "1831.8") == 0)
         {
             strcpy(valueStringArray[i], "--.-");
         }

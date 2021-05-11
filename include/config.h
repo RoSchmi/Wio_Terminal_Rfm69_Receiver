@@ -12,10 +12,10 @@
 //
 
 
-#define ANALOG_SENSOR_01_LABEL "Ampere"    // Labels for sensors to be displayed on Wio Terminal screen (length max 13)
-#define ANALOG_SENSOR_02_LABEL "Watt"       
-#define ANALOG_SENSOR_03_LABEL "KiloWattStd"
-#define ANALOG_SENSOR_04_LABEL "KiloWattStd"
+#define ANALOG_SENSOR_01_LABEL "Watt"    // Labels for sensors to be displayed on Wio Terminal screen (length max 13)
+#define ANALOG_SENSOR_02_LABEL "Today kWh"       
+#define ANALOG_SENSOR_03_LABEL "Watt min"
+#define ANALOG_SENSOR_04_LABEL "Watt max"
 
 #define INVALIDATEINTERVAL_MINUTES 10   // Invalidateinterval in minutes 
                                         // (limited to values between 1 - 60)
