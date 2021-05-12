@@ -18,9 +18,6 @@
 
 #include "SysTime.h"
 #include "TimeFuncs/Rs_TimeZoneHelper.h"
-//#include "TimeFuncs/Rs_time_helpers.h"
-
-
 
 #include "RFM69.h"
 #include "RFM69registers.h"
@@ -67,7 +64,6 @@ uint32_t missedPacketNums = 0;
 uint32_t missedPacketNums_3 = 0;
 
 int missedPacketNumToShow = 0;
-
 
 RFM69 rfm69(RF69_SPI_CS, RF69_IRQ_PIN, IS_RFM69HCW);
 
@@ -128,20 +124,15 @@ const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of th
 
 byte packetBuffer[NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
 
-
 bool ledState = false;
 uint8_t lastResetCause = -1;
 
 const int timeZoneOffset = (int)TIMEZONEOFFSET;
 const int dstOffset = (int)DSTOFFSET;
 
-
 unsigned long utcTime;
 
-
 DateTime dateTimeUTCNow;    // Seconds since 2000-01-01 08:00:00
-
-
 
 const char *ssid = IOT_CONFIG_WIFI_SSID;
 const char *password = IOT_CONFIG_WIFI_PASSWORD;
@@ -152,19 +143,9 @@ static SysTime sysTime;
 
 Rs_TimeZoneHelper timeZoneHelper;
 
-
-
 Timezone myTimezone; 
 
-
-
 WiFiUDP udp;
-
-
-
-
-
-
 
 // Array to retrieve spaces with different length
 char PROGMEM spacesArray[13][13] = {  "", 
@@ -198,7 +179,6 @@ void lcd_log_line(char* line, uint32_t textCol = textColor, uint32_t backCol = b
 }
 
 // forward declarations
-
 unsigned long getNTPtime();
 unsigned long sendNTPpacket(const char* address);
 int16_2_float_function_result reform_uint16_2_float32(uint16_t u1, uint16_t u2);
@@ -207,9 +187,6 @@ int getMonNum(const char * month);
 int getWeekOfMonthNum(const char * weekOfMonth);
 void showDisplayFrame(char * label_01, char * label_02, char * label_03, char * label_04, uint32_t screenCol, uint32_t backCol, uint32_t textCol);
 void fillDisplayFrame(ValueType valueType, double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool pLastMssageMissed);
-
-
-
 
 
 void setup() {
@@ -228,7 +205,6 @@ void setup() {
   delay(100);
   digitalWrite(RFM69_RST, LOW);
   delay(100);
-
 
   Serial.begin(115200);
   //while(!Serial);
@@ -408,7 +384,6 @@ if (!WiFi.enableSTA(true))
   sprintf(buf, "DNS-Server: %s", (char*)dnsServerIp.toString().c_str());
   lcd_log_line(buf);
   
-  
   ntpUpdateInterval =  (NTP_UPDATE_INTERVAL_MINUTES < 1 ? 1 : NTP_UPDATE_INTERVAL_MINUTES) * 60 * 1000;
 
 #if WORK_WITH_WATCHDOG == 1
@@ -539,27 +514,6 @@ void loop() {
                 
                 if (actPacketNum != selectedLastPacketNum)   // neglect double sended meesages
                 {
-                    /*
-                    if (cmdChar == '3')       // Solar temperature sensor message
-                    {
-                        if ((lastPacketNum_3 + 1) < actPacketNum)
-                        {
-                          missedPacketNums_3 += (actPacketNum - lastPacketNum_3 - 1);
-                        }
-                        lastPacketNum_3 = actPacketNum;
-                        missedPacketNumToShow = missedPacketNums_3;
-                    }
-                    else                       // Current/Power sensor message
-                    {
-                        if ((lastPacketNum + 1) < actPacketNum)
-                        {
-                          missedPacketNums += (actPacketNum - lastPacketNum - 1);
-                        }
-                        lastPacketNum = actPacketNum;
-                        missedPacketNumToShow = missedPacketNums;
-                    }
-                    */
-                    
                     char oldChar = receivedData[6];
 
                     sensor_1 = (uint32_t)((uint32_t)receivedData[16] | (uint32_t)receivedData[15] << 8 | (uint32_t)receivedData[14] << 16 | (uint32_t)receivedData[13] << 24);

@@ -28,15 +28,12 @@
                                         // (Sensor readings are considered to be invalid if not successsfully
                                         // read within this timespan)
 
-#define NTP_UPDATE_INTERVAL_MINUTES 144000   //  With this interval sytem time is updated via NTP
+#define NTP_UPDATE_INTERVAL_MINUTES  25  //  With this interval sytem time is updated via NTP
                                         //  with internet time (is limited to be not below 1 min)
 
                                    
 
-#define WORK_WITH_WATCHDOG 1           // 1 = yes, 0 = no, Watchdog is used (1) or not used (0)
-
-
-
+#define WORK_WITH_WATCHDOG 0           // 1 = yes, 0 = no, Watchdog is used (1) or not used (0)
 
 // Set timezoneoffset and daylightsavingtime settings according to your zone
 // https://en.wikipedia.org/wiki/Daylight_saving_time_by_country
@@ -82,10 +79,10 @@
 #define SENSOR_3_OFFSET     0.0        // Calibration Offset to sensor No 3
 #define SENSOR_4_OFFSET     0.0        // Calibration Offset to sensor No 4
 
-# define SENSOR_1_FAHRENHEIT 1         // 1 = yes, 0 = no - Display in Fahrenheit scale
-# define SENSOR_2_FAHRENHEIT 1        // 1 = yes, 0 = no - Display in Fahrenheit scale
-# define SENSOR_3_FAHRENHEIT 1         // 1 = yes, 0 = no - Display in Fahrenheit scale
-# define SENSOR_4_FAHRENHEIT 1         // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_1_FAHRENHEIT 0         // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_2_FAHRENHEIT 0        // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_3_FAHRENHEIT 0         // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_4_FAHRENHEIT 0         // 1 = yes, 0 = no - Display in Fahrenheit scale
 
 
 

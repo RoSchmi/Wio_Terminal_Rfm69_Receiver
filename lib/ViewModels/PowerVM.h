@@ -18,8 +18,5 @@ class PowerVM{
     public:
     // constructor
     PowerVM();
-
-
-
 };
 
