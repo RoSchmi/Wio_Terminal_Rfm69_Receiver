@@ -12,10 +12,16 @@
 //
 
 
-#define ANALOG_SENSOR_01_LABEL "Watt"    // Labels for sensors to be displayed on Wio Terminal screen (length max 13)
-#define ANALOG_SENSOR_02_LABEL "Today kWh"       
-#define ANALOG_SENSOR_03_LABEL "Watt min"
-#define ANALOG_SENSOR_04_LABEL "Watt max"
+#define POWER_SENSOR_01_LABEL "Watt"    // Labels for sensors to be displayed on Wio Terminal 1. screen (length max 13)
+#define POWER_SENSOR_02_LABEL "Today kWh"       
+#define POWER_SENSOR_03_LABEL "Watt min"
+#define POWER_SENSOR_04_LABEL "Watt max"
+
+#define TEMP_SENSOR_01_LABEL "Collector"    // Labels for sensors to be displayed on Wio Terminal 2. screen (length max 13)
+#define TEMP_SENSOR_02_LABEL "Storage"       
+#define TEMP_SENSOR_03_LABEL "Water"
+#define TEMP_SENSOR_04_LABEL ""
+
 
 #define INVALIDATEINTERVAL_MINUTES 10   // Invalidateinterval in minutes 
                                         // (limited to values between 1 - 60)
@@ -27,7 +33,7 @@
 
                                    
 
-#define WORK_WITH_WATCHDOG 0            // 1 = yes, 0 = no, Watchdog is used (1) or not used (0)
+#define WORK_WITH_WATCHDOG 1           // 1 = yes, 0 = no, Watchdog is used (1) or not used (0)
 
 
 
@@ -65,19 +71,21 @@
 #define SHOW_GRAPHIC_SCREEN 1          // 1 = A graphic screen with actual values is shown
                                         // 0 = a log with actions is shown on the screen
 
-#define USE_SIMULATED_SENSORVALUES   // Activates simulated sensor values (sinus curve) or (test values)
+#define USE_SIMULATED_SENSORVALUES     // Activates simulated sensor values (sinus curve) or (test values)
 //#define USE_TEST_VALUES              // Activates sending of test values (see Code in main.cpp)
                                        // if activated we select test values, not sinus curves
+
+#define SCREEN_OFF_TIME_MINUTES 1      // Switch screen off after this time
 
 #define SENSOR_1_OFFSET     0.0        // Calibration Offset to sensor No 1
 #define SENSOR_2_OFFSET     0.0        // Calibration Offset to sensor No 2
 #define SENSOR_3_OFFSET     0.0        // Calibration Offset to sensor No 3
 #define SENSOR_4_OFFSET     0.0        // Calibration Offset to sensor No 4
 
-# define SENSOR_1_FAHRENHEIT 0         // 1 = yes, 0 = no - Display in Fahrenheit scale
-# define SENSOR_2_FAHRENHEIT 0         // 1 = yes, 0 = no - Display in Fahrenheit scale
-# define SENSOR_3_FAHRENHEIT 0         // 1 = yes, 0 = no - Display in Fahrenheit scale
-# define SENSOR_4_FAHRENHEIT 0         // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_1_FAHRENHEIT 1         // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_2_FAHRENHEIT 1        // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_3_FAHRENHEIT 1         // 1 = yes, 0 = no - Display in Fahrenheit scale
+# define SENSOR_4_FAHRENHEIT 1         // 1 = yes, 0 = no - Display in Fahrenheit scale
 
 
 

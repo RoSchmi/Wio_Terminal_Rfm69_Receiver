@@ -8,6 +8,7 @@
 #include <time.h>
 #include "DateTime.h"
 #include "rpcWiFi.h"
+#include "lcd_backlight.hpp"
 
 
 #include "SAMCrashMonitor.h"
@@ -58,9 +59,14 @@
 
 
 uint8_t receivedData[62] {0};
-volatile int actPacketNum = 0;
-volatile int lastPacketNum = 0;
-volatile int lastPacketNum_3 = 0;
+
+int lastPacketNum = 0;
+int lastPacketNum_3 = 0;
+
+uint32_t missedPacketNums = 0;
+uint32_t missedPacketNums_3 = 0;
+
+int missedPacketNumToShow = 0;
 
 
 RFM69 rfm69(RF69_SPI_CS, RF69_IRQ_PIN, IS_RFM69HCW);
@@ -68,6 +74,10 @@ RFM69 rfm69(RF69_SPI_CS, RF69_IRQ_PIN, IS_RFM69HCW);
 PowerVM powerVM;
 
 TFT_eSPI tft;
+
+static LCDBackLight backLight;
+uint8_t maxBrightness = 0;
+
 int current_text_line = 0;
 
 #define LCD_WIDTH 320
@@ -82,8 +92,15 @@ uint32_t backColor = TFT_WHITE;
 uint32_t textColor = TFT_BLACK;
 
 bool showPowerScreen = true;
+bool lastScreenWasPower = true;
 
 uint32_t loopCounter = 0;
+
+typedef enum 
+        {
+            Temperature,
+            Power
+        } ValueType;
 
 
 uint32_t timeNtpUpdateCounter = 0;
@@ -102,7 +119,7 @@ float powerDayMin = 50000;   // very high value
 float powerDayMax = 0;
 
 DateTime BootTimeUtc = DateTime();
-//TimeSpan Ontime = TimeSpan(0);
+DateTime DisplayOnTime = DateTime();
 
 char timeServer[] = "pool.ntp.org"; // external NTP server e.g. better pool.ntp.org
 unsigned int localPort = 2390;      // local port to listen for UDP packets
@@ -189,7 +206,7 @@ int getDayNum(const char * day);
 int getMonNum(const char * month);
 int getWeekOfMonthNum(const char * weekOfMonth);
 void showDisplayFrame(char * label_01, char * label_02, char * label_03, char * label_04, uint32_t screenCol, uint32_t backCol, uint32_t textCol);
-void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool sendResultState, uint32_t tryUpLoadCtr);
+void fillDisplayFrame(ValueType valueType, double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool pLastMssageMissed);
 
 
 
@@ -403,6 +420,10 @@ if (!WiFi.enableSTA(true))
   while ((getTimeCtr < 5) && utcTime == 0)
   {   
       getTimeCtr++;
+      #if WORK_WITH_WATCHDOG == 1
+        SAMCrashMonitor::iAmAlive();
+      #endif
+
       utcTime = getNTPtime();
   }
 
@@ -429,6 +450,7 @@ if (!WiFi.enableSTA(true))
   dateTimeUTCNow = sysTime.getTime();
 
   BootTimeUtc = dateTimeUTCNow;
+  DisplayOnTime = dateTimeUTCNow;
   
   // RoSchmi for DST tests
   // dateTimeUTCNow = DateTime(2021, 10, 31, 1, 1, 0);
@@ -461,22 +483,19 @@ if (!WiFi.enableSTA(true))
 
   Serial.printf("Working at %i MHz", FREQUENCY==RF69_433MHZ ? 433 : FREQUENCY==RF69_868MHZ ? 868 : 915);
 
-  //showDisplayFrame();
-  //showDisplayFrame(ANALOG_SENSOR_01_LABEL, ANALOG_SENSOR_02_LABEL,ANALOG_SENSOR_03_LABEL, ANALOG_SENSOR_04_LABEL, TFT_BLUE, TFT_LIGHTGREY,  TFT_BLACK);
-  showDisplayFrame(ANALOG_SENSOR_01_LABEL, ANALOG_SENSOR_02_LABEL, ANALOG_SENSOR_03_LABEL, ANALOG_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);
-  //fillDisplayFrame(999.9, 999.9, 999.9, 999.9, false, false, false, false, sendResultState, tryUploadCounter);
-  fillDisplayFrame(999.9, 999.9, 999.9, 999.9, false, false, false, false, true, 1);
+  
+  showDisplayFrame(POWER_SENSOR_01_LABEL, POWER_SENSOR_02_LABEL, POWER_SENSOR_03_LABEL, POWER_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);
+  
+  fillDisplayFrame(ValueType::Power, 999.9, 999.9, 999.9, 999.9, false, false, false, false, false);
   delay(50);
+
+  backLight.initialize();
+  maxBrightness = backLight.getMaxBrightness();
 
   previousNtpUpdateMillis = millis();
   previousNtpRequestMillis = millis();
-
-
 }
   
-
- // uint8_t initialize(uint8_t freqBand, uint8_t nodeID, uint8_t networkID);
-
 void loop() {
   //check if something was received (could be an interrupt from the radio)
   if (rfm69.receiveDone())
@@ -492,21 +511,25 @@ void loop() {
     uint16_t sensor_3_Lower = 0;
     uint16_t sensor_3_Higher = 0;
 
+    bool lastMessageMissed = false;
+
     //print message received to serial
     Serial.printf("[%i]\r\n", senderID);
     uint8_t payLoadLen = rfm69.PAYLOADLEN;
     Serial.println(payLoadLen);
     
+    /*
     for (int i = 0; i < payLoadLen; i++)
     {
       Serial.printf("0x%02x ", receivedData[i]);
     }
     Serial.println("");
+    */
     
     char workBuffer[10] {0};
     memcpy(workBuffer, receivedData, 3);
     workBuffer[3] = '\0';
-    actPacketNum = atoi(workBuffer);
+    int actPacketNum = atoi(workBuffer);
 
     memcpy(workBuffer, receivedData + 8, 4);
     workBuffer[4] = '\0';
@@ -516,14 +539,26 @@ void loop() {
                 
                 if (actPacketNum != selectedLastPacketNum)   // neglect double sended meesages
                 {
-                    if (cmdChar == '3')
+                    /*
+                    if (cmdChar == '3')       // Solar temperature sensor message
                     {
+                        if ((lastPacketNum_3 + 1) < actPacketNum)
+                        {
+                          missedPacketNums_3 += (actPacketNum - lastPacketNum_3 - 1);
+                        }
                         lastPacketNum_3 = actPacketNum;
+                        missedPacketNumToShow = missedPacketNums_3;
                     }
-                    else
+                    else                       // Current/Power sensor message
                     {
+                        if ((lastPacketNum + 1) < actPacketNum)
+                        {
+                          missedPacketNums += (actPacketNum - lastPacketNum - 1);
+                        }
                         lastPacketNum = actPacketNum;
+                        missedPacketNumToShow = missedPacketNums;
                     }
+                    */
                     
                     char oldChar = receivedData[6];
 
@@ -537,7 +572,19 @@ void loop() {
                     {
                         case SOLARPUMP_CURRENT_SENDER_ID :    
                         {
-                          
+                          lastPacketNum = lastPacketNum == 0 ? actPacketNum -1 : lastPacketNum;
+                          if ((lastPacketNum + 1) < actPacketNum)
+                          {
+                            lastMessageMissed = true;
+                            missedPacketNums += (actPacketNum - lastPacketNum - 1);
+                          }
+                          else
+                          {
+                            lastMessageMissed = false;
+                          }
+                          lastPacketNum = actPacketNum;
+                          missedPacketNumToShow = missedPacketNums;
+
                           switch (cmdChar)
                           {
                             case '0':             // comes from solar pump
@@ -546,7 +593,6 @@ void loop() {
                                 Serial.println("SolarPump event Sendr Id 2");
                                 break;
                             }
-
                             case '2':             // comes from current sensor
                             {
 
@@ -566,20 +612,26 @@ void loop() {
                               Serial.println(workInFloat.value, 2);
                               dateTimeUTCNow = sysTime.getTime();
                               DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
-                              if (localTime.day() != actDay)
+
+                              if (localTime.day() != actDay)  // evera day calculate new minimum and maximum power values
                               {
                                 actDay = localTime.day();
                                 powerDayMin = 50000;   // very high value
                                 powerDayMax = 0;
                                 workAtStartOfDay = workAtStartOfDay < 0.0001 ? workInFloat.value : workAtStartOfDay;
                               }
-                              powerDayMin = powerInFloat < powerDayMin ? powerInFloat : powerDayMin;
-                              powerDayMax = powerInFloat > powerDayMax ? powerInFloat : powerDayMax;
-                              
-                              
-
-                              fillDisplayFrame(powerInFloat, workInFloat.value - workAtStartOfDay, powerDayMin, powerDayMax, false, false, false, false, true, 0);
-
+                              powerDayMin = powerInFloat < powerDayMin ? powerInFloat : powerDayMin;   // actualize day minimum power value
+                              powerDayMax = powerInFloat > powerDayMax ? powerInFloat : powerDayMax;   // actualize day maximum power value
+                              if (showPowerScreen)
+                              {
+                                if (!lastScreenWasPower)                             
+                                {
+                                  lastScreenWasPower = true;
+                                  showDisplayFrame(POWER_SENSOR_01_LABEL, POWER_SENSOR_02_LABEL, POWER_SENSOR_03_LABEL, POWER_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);                                 
+                                }
+                                fillDisplayFrame(ValueType::Power, powerInFloat, workInFloat.value - workAtStartOfDay, powerDayMin, powerDayMax, false, false, false, false, lastMessageMissed);
+                              }
+                              Serial.printf("Missed Power-Messages: %d \r\n", missedPacketNums);
                               break;
                             }                                                      
                           }
@@ -587,27 +639,50 @@ void loop() {
                         }
                         case SOLAR_TEMP_SENDER_ID :    
                         {
+                          lastPacketNum_3 = lastPacketNum_3 == 0 ? actPacketNum -1 : lastPacketNum_3;
+                          if ((lastPacketNum_3 + 1) < actPacketNum)
+                          {
+                            lastMessageMissed = true;
+                            missedPacketNums_3 += (actPacketNum - lastPacketNum_3 - 1);
+                          }
+                          else
+                          {
+                            lastMessageMissed = false;
+                          }
+                          lastPacketNum_3 = actPacketNum;
+                          missedPacketNumToShow = missedPacketNums_3;
+
                           switch (cmdChar)
                           {                          
                             case '3':           // came from temp sensors
                             {
                               float collector_float = (float)(((float)sensor_1 / 10) - 70);
-                              String collectorInString = String(collector_float, 2);
+                              String collectorInString = String(collector_float, 1);
                               Serial.print("Collector: ");
                               Serial.println(collectorInString);
-                              //Serial.printf("Collector: %d \r\n", (int)collector_float);
-
+                              
                               float storage_float = (float)(((float)sensor_2 / 10) - 70);
-                              Serial.printf("Storage: %d \r\n", (int)storage_float);
+                              String storageInString = String(storage_float, 1);
+                              Serial.print("Storage: ");
+                              Serial.println(collectorInString);
 
                               float water_float = (float)(((float)sensor_3 / 10) - 70);
-                              Serial.printf("Water: %d \r\n", (int)water_float);
-                                                           
+                              String waterInString = String(water_float, 1);
+                              Serial.print("Water: ");
+                              Serial.println(waterInString);
+                              if (!showPowerScreen)
+                              {
+                                if (lastScreenWasPower)                             
+                                {
+                                  lastScreenWasPower = false;
+                                  showDisplayFrame(TEMP_SENSOR_01_LABEL, TEMP_SENSOR_02_LABEL, TEMP_SENSOR_03_LABEL, TEMP_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);                                 
+                                }
+                                fillDisplayFrame(ValueType::Temperature, collector_float, storage_float, water_float, 999.9, false, false, false, false, lastMessageMissed);
+                              }
+                              Serial.printf("Missed Temp-Messages: %d \r\n", missedPacketNums_3);
                               break;
-                            }
-                            
+                            }                           
                           }
-
                         }
                         break;
                     }
@@ -632,28 +707,18 @@ void loop() {
                     }
                     
                 }
-            
-
-
-   //Char cmdChar = Encoding.UTF8.GetChars(e.receivedData, 4, 1)[0];
-    
-    //UInt16 sendInfo = UInt16.Parse(new string(Encoding.UTF8.GetChars(e.receivedData, 8, 4)));
   
-    //actPacketNum = int.Parse(new string(Encoding.UTF8.GetChars(e.receivedData, 0, 3)));
-
     Serial.print("   [RX_RSSI:");Serial.print(rfm69.RSSI);Serial.print("]\r\n");
 
-    //check if received message contains Hello World
+    //check if received message contains Hello World (is here never the case, left only as an example)
     if (strstr((char *)rfm69.DATA, "Hello World"))
     {
       //check if sender wanted an ACK
       if (rfm69.ACKRequested())
-      {
-          
+      {       
           unsigned long Start = millis();
           while(millis() - Start < 50);    // A delay is needed for NETMF (50 ms ?)
-                                           // if ACK comes to early it is missed by NETMF
-                           
+                                           // if ACK comes to early it is missed by NETMF                          
           rfm69.sendACK();
           Serial.println(" - ACK sent");
       }
@@ -708,6 +773,21 @@ void loop() {
         dateTimeUTCNow = sysTime.getTime();
       }
 
+      if ((dateTimeUTCNow.operator-(DisplayOnTime)).minutes() > SCREEN_OFF_TIME_MINUTES)
+      {
+        Serial.printf("Backlight set, old state was: %d", tft.backlight());
+
+        //tft.setBacklight(20);
+
+        backLight.setBrightness(maxBrightness / 20);
+        DisplayOnTime = dateTimeUTCNow;
+      }
+
+      //(dateTimeUTCNow.operator-(DisplayOnTime).
+
+
+      //if (  dateTimeUTCNow   .operator-(DisplayOnTime)     // .operator-(TimeSpan(0,0,1,0))  ) 
+
       if (millis() - previousDisplayTimeUpdateMillis > 1000)
       {
         DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
@@ -717,7 +797,6 @@ void loop() {
     
         localTime.toString(buf);
   
-    
         uint8_t actMinute = localTime.minute();
         if (lastDateOutputMinute != actMinute)
         {
@@ -725,19 +804,34 @@ void loop() {
           TimeSpan onTime = dateTimeUTCNow.operator-(BootTimeUtc);
           buf[strlen(buf) - 3] =  (char)'\0';       
           current_text_line = 10;
-          sprintf(lineBuf, "%s  On: %d:%02d:%02d", buf, onTime.days(), onTime.hours(), onTime.minutes());
-
-          //lineBuf[strlen(lineBuf) -3] = (char)'\0';
+          sprintf(lineBuf, "%s  On: %d:%02d:%02d  f:%2d", buf, onTime.days(), onTime.hours(), onTime.minutes(), missedPacketNumToShow);
+         
           lcd_log_line(lineBuf);
         }
       }
 
+      if (digitalRead(WIO_5S_PRESS) == LOW)    // Toggle between power screen and temp screen
+      {
+        if (showPowerScreen)
+        {
+          showPowerScreen = false;
+          showDisplayFrame(TEMP_SENSOR_01_LABEL, TEMP_SENSOR_02_LABEL, TEMP_SENSOR_03_LABEL, TEMP_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);        
+        }
+        else
+        {
+          showPowerScreen = true;
+          showDisplayFrame(POWER_SENSOR_01_LABEL, POWER_SENSOR_02_LABEL, POWER_SENSOR_03_LABEL, POWER_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);        
+        }
+        fillDisplayFrame(ValueType::Power, 999.9, 999.9, 999.9, 999.9, false, false, false, false, false);
 
-
-
-  }// put your main code here, to run repeatedly:
+        //tft.setBacklight(0);
+        backLight.setBrightness (maxBrightness);
+        DisplayOnTime = dateTimeUTCNow;
+      // Wait until button released
+      while(digitalRead(WIO_5S_PRESS) == LOW);   
+      }
+  }
 }
-
 
 // To manage daylightsavingstime stuff convert input ("Last", "First", "Second", "Third", "Fourth") to int equivalent
 int getWeekOfMonthNum(const char * weekOfMonth)
@@ -866,22 +960,15 @@ unsigned long sendNTPpacket(const char* address) {
 }
 
 void showDisplayFrame(char * label_01, char * label_02, char * label_03, char * label_04, uint32_t screenCol, uint32_t backCol, uint32_t textCol)
-{
-  if(showPowerScreen)
-  {
-    //tft.fillScreen(TFT_BLUE);
+{ 
     tft.fillScreen(screenCol);
-
-    //backColor = TFT_LIGHTGREY;
-    backColor = backCol;
-
-    textFont = FSSB9;
-    //textColor = TFT_BLACK;
+    backColor = backCol; 
     textColor = textCol;
+    textFont = FSSB9;  
     
     char line[35]{0};
     char label_left[15] {0};
-    //strncpy(label_left, ANALOG_SENSOR_01_LABEL, 13);
+    
     strncpy(label_left, label_01, 13);
     char label_right[15] {0};
     strncpy(label_right, label_02, 13);
@@ -901,13 +988,10 @@ void showDisplayFrame(char * label_01, char * label_02, char * label_03, char * 
     current_text_line = 10;   
     line[0] = '\0';   
     lcd_log_line((char *)line, textColor, backColor, screenColor);
-  }
 }
 
-void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool pSendResultState, uint32_t pTryUploadCtr)
+void fillDisplayFrame(ValueType valueType, double an_1, double an_2, double an_3, double an_4, bool on_1,  bool on_2, bool on_3, bool on_4, bool pLastMessageMissed)
 {
-  if (showPowerScreen)
-  {
     static TFT_eSprite spr = TFT_eSprite(&tft);
 
     static uint8_t lastDateOutputMinute = 60;
@@ -924,19 +1008,23 @@ void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool o
     char lineBuf[40] {0};
 
     char valueStringArray[4][8] = {{0}, {0}, {0}, {0}};
+
     
-    /*
-    sprintf(valueStringArray[0], "%.1f", SENSOR_1_FAHRENHEIT == 1 ?  dht.convertCtoF(an_1) :  an_1 );
-    sprintf(valueStringArray[1], "%.1f", SENSOR_2_FAHRENHEIT == 1 ?  dht.convertCtoF(an_2) :  an_2 );
-    sprintf(valueStringArray[2], "%.1f", SENSOR_3_FAHRENHEIT == 1 ?  dht.convertCtoF(an_3) :  an_3 );
-    sprintf(valueStringArray[3], "%.1f", SENSOR_4_FAHRENHEIT == 1 ?  dht.convertCtoF(an_4) :  an_4 );
-    */
-
-    sprintf(valueStringArray[0], "%.1f", an_1);
-    sprintf(valueStringArray[1], "%.2f", an_2);
-    sprintf(valueStringArray[2], "%.1f", an_3);
-    sprintf(valueStringArray[3], "%.1f", an_4);
-
+    if (valueType == ValueType::Temperature)
+    {
+      sprintf(valueStringArray[0], "%.1f", SENSOR_1_FAHRENHEIT == 1 ?  an_1 * 9 / 5 + 32 :  an_1 );
+      sprintf(valueStringArray[1], "%.1f", SENSOR_2_FAHRENHEIT == 1 ?  an_1 * 9 / 5 + 32 :  an_2 );
+      sprintf(valueStringArray[2], "%.1f", SENSOR_3_FAHRENHEIT == 1 ?  an_1 * 9 / 5 + 32 :  an_3 );
+      sprintf(valueStringArray[3], "%.1f", SENSOR_4_FAHRENHEIT == 1 ?  an_1 * 9 / 5 + 32 :  an_4 );
+    }
+    else
+    {
+      sprintf(valueStringArray[0], "%.1f", an_1);
+      sprintf(valueStringArray[1], "%.2f", an_2);
+      sprintf(valueStringArray[2], "%.1f", an_3);
+      sprintf(valueStringArray[3], "%.1f", an_4);
+    }
+    
     for (int i = 0; i < 4; i++)
     {
         // 999.9 is invalid, 1831.8 is invalid when tempatures are expressed in Fahrenheit
@@ -977,20 +1065,10 @@ void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool o
 
     myTimezone.utcIsDST(dateTimeUTCNow.unixtime());
 
-
     int timeZoneOffsetUTC = myTimezone.utcIsDST(dateTimeUTCNow.unixtime()) ? TIMEZONEOFFSET + DSTOFFSET : TIMEZONEOFFSET;
     
-    //time_helpers.update(dateTimeUTCNow);
-    //int timeZoneOffsetUTC = time_helpers.isDST() ? TIMEZONEOFFSET + DSTOFFSET : TIMEZONEOFFSET;
-
     DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
     
-    //DateTime localTime = dateTimeUTCNow.operator+(TimeSpan(timeZoneOffsetUTC * 60));
-    
-    //char formattedTime[64] {0};
-
-    //time_helpers.formattedTime(formattedTime, sizeof(formattedTime), (char *)"%d. %b %Y - %A %T");
-
     char buf[35] = "DDD, DD MMM YYYY hh:mm:ss GMT";
     
     localTime.toString(buf);
@@ -1007,33 +1085,22 @@ void fillDisplayFrame(double an_1, double an_2, double an_3, double an_4, bool o
        lcd_log_line(lineBuf);
     }
 
-    // Show signal circle on the screen, showing if upload was successfful (green) or not (red)
-    if (pTryUploadCtr != lastTryUploadCtr)    // if new upload try has happened, show actualized signal 
+    // Show signal circle on the screen, showing if no message was missed (green) or not (red)
+    if (pLastMessageMissed)
     {
-        if (pSendResultState)
-        {
-          tft.fillCircle(300, 9, 8, TFT_DARKGREEN);
-          lastSendResultState = true;          
-        }
-        else
-        {
-          tft.fillCircle(300, 9, 8, TFT_RED);
-          lastSendResultState = false;         
-        }       
-        lastTryUploadCtr = pTryUploadCtr;
+      tft.fillCircle(300, 9, 8, TFT_RED);
+      lastSendResultState = true;          
     }
-    else                                  // if no upload try --> switch off if it was green before
+    else
     {
-        if (lastSendResultState == true)
-        {
-          tft.fillCircle(300, 9, 8, TFT_BLUE);
-        }
-    }
-  
+      tft.fillCircle(300, 9, 8, TFT_DARKGREEN);
+      lastSendResultState = false;         
+    }       
+
     tft.fillRect(16, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_1 ? TFT_RED : TFT_DARKGREY);
     tft.fillRect(92, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_2 ? TFT_RED : TFT_DARKGREY);
     tft.fillRect(168, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_3 ? TFT_RED : TFT_DARKGREY);
     tft.fillRect(244, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_4 ? TFT_RED : TFT_DARKGREY);
-  }
+ 
 }
 
