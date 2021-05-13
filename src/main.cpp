@@ -1,15 +1,12 @@
+//File: Wio_Terminal_Rfm69_Receiver
 // Copyright Roschmi 2021, License Apache V2
 // Please obey the License agreements of the libraries included like Rfm69 and others
-
-
-//File: Wio_Terminal_Rfm69_Receiver
 
 #include <Arduino.h>
 #include <time.h>
 #include "DateTime.h"
 #include "rpcWiFi.h"
 #include "lcd_backlight.hpp"
-
 
 #include "SAMCrashMonitor.h"
 
@@ -53,7 +50,6 @@
 #define RF69_SPI_CS           SS // SS is the SPI slave select pin, 
 #define RF69_IRQ_PIN          4  // Rfm69 Interrupt pin
 #define RFM69_RST             3  // Rfm69 reset pin
-
 
 uint8_t receivedData[62] {0};
 
@@ -512,159 +508,139 @@ void loop() {
 
     int selectedLastPacketNum = (cmdChar == '3') ? lastPacketNum_3 : lastPacketNum;
                 
-                if (actPacketNum != selectedLastPacketNum)   // neglect double sended meesages
-                {
-                    char oldChar = receivedData[6];
+    if (actPacketNum != selectedLastPacketNum)   // neglect double sended meesages
+    {
+      char oldChar = receivedData[6];
 
-                    sensor_1 = (uint32_t)((uint32_t)receivedData[16] | (uint32_t)receivedData[15] << 8 | (uint32_t)receivedData[14] << 16 | (uint32_t)receivedData[13] << 24);
-                    sensor_2 = (uint32_t)((uint32_t)receivedData[21] | (uint32_t)receivedData[20] << 8 | (uint32_t)receivedData[19] << 16 | (uint32_t)receivedData[18] << 24);                                        
-                    sensor_3 = (uint32_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8 | (uint32_t)receivedData[24] << 16 | (uint32_t)receivedData[23] << 24);
-                    sensor_3_Lower = (uint16_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8);
-                    sensor_3_Higher = (uint16_t)((uint32_t)receivedData[24] | (uint32_t)receivedData[23] << 8);
+      sensor_1 = (uint32_t)((uint32_t)receivedData[16] | (uint32_t)receivedData[15] << 8 | (uint32_t)receivedData[14] << 16 | (uint32_t)receivedData[13] << 24);
+      sensor_2 = (uint32_t)((uint32_t)receivedData[21] | (uint32_t)receivedData[20] << 8 | (uint32_t)receivedData[19] << 16 | (uint32_t)receivedData[18] << 24);                                        
+      sensor_3 = (uint32_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8 | (uint32_t)receivedData[24] << 16 | (uint32_t)receivedData[23] << 24);
+      sensor_3_Lower = (uint16_t)((uint32_t)receivedData[26] | (uint32_t)receivedData[25] << 8);
+      sensor_3_Higher = (uint16_t)((uint32_t)receivedData[24] | (uint32_t)receivedData[23] << 8);
                    
-                    switch (senderID)
-                    {
-                        case SOLARPUMP_CURRENT_SENDER_ID :    
-                        {
-                          lastPacketNum = lastPacketNum == 0 ? actPacketNum -1 : lastPacketNum;
-                          if ((lastPacketNum + 1) < actPacketNum)
-                          {
-                            lastMessageMissed = true;
-                            missedPacketNums += (actPacketNum - lastPacketNum - 1);
-                          }
-                          else
-                          {
-                            lastMessageMissed = false;
-                          }
-                          lastPacketNum = actPacketNum;
-                          missedPacketNumToShow = missedPacketNums;
+      switch (senderID)
+      {
+          case SOLARPUMP_CURRENT_SENDER_ID :    
+          {
+            lastPacketNum = lastPacketNum == 0 ? actPacketNum -1 : lastPacketNum;
+            if ((lastPacketNum + 1) < actPacketNum)
+            {
+              lastMessageMissed = true;
+              missedPacketNums += (actPacketNum - lastPacketNum - 1);
+            }
+            else
+            {
+              lastMessageMissed = false;
+            }
+            lastPacketNum = actPacketNum;
+            missedPacketNumToShow = missedPacketNums;
 
-                          switch (cmdChar)
-                          {
-                            case '0':             // comes from solar pump
-                            case '1':
-                            {
-                                Serial.println("SolarPump event Sendr Id 2");
-                                break;
-                            }
-                            case '2':             // comes from current sensor
-                            {
-
-                              float currentInFloat = ((float)sensor_1 / 100);
-                              String currentInString = String(currentInFloat, 2);
-                              Serial.print("Current: ");
-                              Serial.println(currentInString);
-
-                              float powerInFloat = ((float)sensor_2 / 100);
-                              String powerInString = String(powerInFloat, 2);
-                              Serial.print("Power: ");
-                              Serial.println(powerInString);
-                            
-                               // convert to float
-                              int16_2_float_function_result workInFloat = reform_uint16_2_float32(sensor_3_Higher, sensor_3_Lower);
-                              Serial.print("Work: ");       
-                              Serial.println(workInFloat.value, 2);
-                              dateTimeUTCNow = sysTime.getTime();
-                              DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
-
-                              if (localTime.day() != actDay)  // evera day calculate new minimum and maximum power values
-                              {
-                                actDay = localTime.day();
-                                powerDayMin = 50000;   // very high value
-                                powerDayMax = 0;
-                                workAtStartOfDay = workAtStartOfDay < 0.0001 ? workInFloat.value : workAtStartOfDay;
-                              }
-                              powerDayMin = powerInFloat < powerDayMin ? powerInFloat : powerDayMin;   // actualize day minimum power value
-                              powerDayMax = powerInFloat > powerDayMax ? powerInFloat : powerDayMax;   // actualize day maximum power value
-                              if (showPowerScreen)
-                              {
-                                if (!lastScreenWasPower)                             
-                                {
-                                  lastScreenWasPower = true;
-                                  showDisplayFrame(POWER_SENSOR_01_LABEL, POWER_SENSOR_02_LABEL, POWER_SENSOR_03_LABEL, POWER_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);                                 
-                                }
-                                fillDisplayFrame(ValueType::Power, powerInFloat, workInFloat.value - workAtStartOfDay, powerDayMin, powerDayMax, false, false, false, false, lastMessageMissed);
-                              }
-                              Serial.printf("Missed Power-Messages: %d \r\n", missedPacketNums);
-                              break;
-                            }                                                      
-                          }
-                          break;
-                        }
-                        case SOLAR_TEMP_SENDER_ID :    
-                        {
-                          lastPacketNum_3 = lastPacketNum_3 == 0 ? actPacketNum -1 : lastPacketNum_3;
-                          if ((lastPacketNum_3 + 1) < actPacketNum)
-                          {
-                            lastMessageMissed = true;
-                            missedPacketNums_3 += (actPacketNum - lastPacketNum_3 - 1);
-                          }
-                          else
-                          {
-                            lastMessageMissed = false;
-                          }
-                          lastPacketNum_3 = actPacketNum;
-                          missedPacketNumToShow = missedPacketNums_3;
-
-                          switch (cmdChar)
-                          {                          
-                            case '3':           // came from temp sensors
-                            {
-                              float collector_float = (float)(((float)sensor_1 / 10) - 70);
-                              String collectorInString = String(collector_float, 1);
-                              Serial.print("Collector: ");
-                              Serial.println(collectorInString);
-                              
-                              float storage_float = (float)(((float)sensor_2 / 10) - 70);
-                              String storageInString = String(storage_float, 1);
-                              Serial.print("Storage: ");
-                              Serial.println(collectorInString);
-
-                              float water_float = (float)(((float)sensor_3 / 10) - 70);
-                              String waterInString = String(water_float, 1);
-                              Serial.print("Water: ");
-                              Serial.println(waterInString);
-                              if (!showPowerScreen)
-                              {
-                                if (lastScreenWasPower)                             
-                                {
-                                  lastScreenWasPower = false;
-                                  showDisplayFrame(TEMP_SENSOR_01_LABEL, TEMP_SENSOR_02_LABEL, TEMP_SENSOR_03_LABEL, TEMP_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);                                 
-                                }
-                                fillDisplayFrame(ValueType::Temperature, collector_float, storage_float, water_float, 999.9, false, false, false, false, lastMessageMissed);
-                              }
-                              Serial.printf("Missed Temp-Messages: %d \r\n", missedPacketNums_3);
-                              break;
-                            }                           
-                          }
-                        }
-                        break;
-                    }
-                                                      
-                    if (cmdChar == '0' || cmdChar == '1')      // Comes from Pump on/off sensor
-                    {
-                        //actState = cmdChar == '1' ? InputSensorState.High : InputSensorState.Low;
-                        //oldState = oldChar == '1' ? InputSensorState.High : InputSensorState.Low;
-                       
-                        //OnRfm69OnOffSensorSend(this, new OnOffSensorEventArgs(actState, oldState, repeatSend, DateTime.Now.AddMinutes(RoSchmi.DayLihtSavingTime.DayLihtSavingTime.DayLightTimeOffset(dstStart, dstEnd, dstOffset, DateTime.Now, true)), SensorLabel, SensorLocation, MeasuredQuantity, DestinationTable, Channel, false, current, power, work));
-                    }
-                    if (cmdChar == '2')                          // Comes from current sensor    
-                    {
-                        
-                      //  OnRfm69DataSensorSend(this, new DataSensorEventArgs(DateTime.Now.AddMinutes(RoSchmi.DayLihtSavingTime.DayLihtSavingTime.DayLightTimeOffset(dstStart, dstEnd, dstOffset, DateTime.Now, true)), repeatSend, current, power, work, SensorLabel, SensorLocation, MeasuredQuantityContinuous, DestinationTableContinuous, Channel, false));
-                    }
-                    if (cmdChar == '3')                          // Comes from solar temperature sensor (Collector, Storage, Water)
-                    {
-                      //  OnRfm69SolarTempsDataSensorSend(this, new DataSensorEventArgs(DateTime.Now.AddMinutes(RoSchmi.DayLihtSavingTime.DayLihtSavingTime.DayLightTimeOffset(dstStart, dstEnd, dstOffset, DateTime.Now, true)), repeatSend, current, power, work, SensorLabel, SensorLocation, MeasuredQuantityContinuous, "EscapeTableLocation_03", Channel, false));
-                        // Destination Table is changed to "EscapeTableLocation_03" (Magic String)
-                       
-                    }
-                    
+            switch (cmdChar)
+              {
+                case '0':             // comes from solar pump
+                case '1':
+                {
+                  Serial.println("SolarPump event Sendr Id 2");
+                  break;
                 }
-  
+                case '2':             // comes from current sensor
+                {
+
+                float currentInFloat = ((float)sensor_1 / 100);
+                String currentInString = String(currentInFloat, 2);
+                Serial.print("Current: ");
+                Serial.println(currentInString);
+
+                float powerInFloat = ((float)sensor_2 / 100);
+                String powerInString = String(powerInFloat, 2);
+                Serial.print("Power: ");
+                Serial.println(powerInString);
+                            
+                // convert to float
+                int16_2_float_function_result workInFloat = reform_uint16_2_float32(sensor_3_Higher, sensor_3_Lower);
+                Serial.print("Work: ");       
+                Serial.println(workInFloat.value, 2);
+                dateTimeUTCNow = sysTime.getTime();
+                DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
+
+                if (localTime.day() != actDay)  // evera day calculate new minimum and maximum power values
+                {
+                  actDay = localTime.day();
+                  powerDayMin = 50000;   // very high value
+                  powerDayMax = 0;
+                  workAtStartOfDay = workAtStartOfDay < 0.0001 ? workInFloat.value : workAtStartOfDay;
+                  }
+                    powerDayMin = powerInFloat < powerDayMin ? powerInFloat : powerDayMin;   // actualize day minimum power value
+                    powerDayMax = powerInFloat > powerDayMax ? powerInFloat : powerDayMax;   // actualize day maximum power value
+                    if (showPowerScreen)
+                    {
+                      if (!lastScreenWasPower)                             
+                      {
+                        lastScreenWasPower = true;
+                        showDisplayFrame(POWER_SENSOR_01_LABEL, POWER_SENSOR_02_LABEL, POWER_SENSOR_03_LABEL, POWER_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);                                 
+                      }
+                      fillDisplayFrame(ValueType::Power, powerInFloat, workInFloat.value - workAtStartOfDay, powerDayMin, powerDayMax, false, false, false, false, lastMessageMissed);
+                    }
+                    Serial.printf("Missed Power-Messages: %d \r\n", missedPacketNums);
+                    break;
+                  }                                                      
+                }
+                break;
+              }
+          case SOLAR_TEMP_SENDER_ID :    // came from temp sensors
+          {
+            lastPacketNum_3 = lastPacketNum_3 == 0 ? actPacketNum -1 : lastPacketNum_3;
+            if ((lastPacketNum_3 + 1) < actPacketNum)
+            {
+              lastMessageMissed = true;
+              missedPacketNums_3 += (actPacketNum - lastPacketNum_3 - 1);
+            }
+            else
+            {
+              lastMessageMissed = false;
+            }
+            lastPacketNum_3 = actPacketNum;
+            missedPacketNumToShow = missedPacketNums_3;
+
+            switch (cmdChar)
+            {                          
+              case '3':           // came from temp sensors, cmdType 3
+              {
+                float collector_float = (float)(((float)sensor_1 / 10) - 70);
+                String collectorInString = String(collector_float, 1);
+                Serial.print("Collector: ");
+                Serial.println(collectorInString);
+                              
+                float storage_float = (float)(((float)sensor_2 / 10) - 70);
+                String storageInString = String(storage_float, 1);
+                Serial.print("Storage: ");
+                Serial.println(collectorInString);
+
+                float water_float = (float)(((float)sensor_3 / 10) - 70);
+                String waterInString = String(water_float, 1);
+                Serial.print("Water: ");
+                Serial.println(waterInString);
+                if (!showPowerScreen)
+                {
+                  if (lastScreenWasPower)                             
+                  {
+                    lastScreenWasPower = false;
+                    showDisplayFrame(TEMP_SENSOR_01_LABEL, TEMP_SENSOR_02_LABEL, TEMP_SENSOR_03_LABEL, TEMP_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);                                 
+                  }
+                  fillDisplayFrame(ValueType::Temperature, collector_float, storage_float, water_float, 999.9, false, false, false, false, lastMessageMissed);
+                }
+                Serial.printf("Missed Temp-Messages: %d \r\n", missedPacketNums_3);
+                break;
+              }                           
+            }
+          }
+          break;
+      }                                                                           
+    }                  
+                
     Serial.print("   [RX_RSSI:");Serial.print(rfm69.RSSI);Serial.print("]\r\n");
 
-    //check if received message contains Hello World (is here never the case, left only as an example)
+    //check condition if Ack should be sent (example: contains Hello World) (is here never the case, left only as an example)
     if (strstr((char *)rfm69.DATA, "Hello World"))
     {
       //check if sender wanted an ACK
@@ -683,8 +659,6 @@ void loop() {
   Serial.flush(); //make sure all serial data is clocked out before sleeping the MCU
 
   //********   End of Rfm69 stuff   **************
-
-  //delay (100);
 
   if (loopCounter++ % 10000 == 0)   // Do other things only every 10000 th round and toggle Led to signal that App is running
   {
@@ -726,22 +700,15 @@ void loop() {
       {
         dateTimeUTCNow = sysTime.getTime();
       }
-
+      
+      // Time to reduce backlight has expired ?
       if ((dateTimeUTCNow.operator-(DisplayOnTime)).minutes() > SCREEN_OFF_TIME_MINUTES)
       {
-        Serial.printf("Backlight set, old state was: %d", tft.backlight());
-
-        //tft.setBacklight(20);
-
         backLight.setBrightness(maxBrightness / 20);
         DisplayOnTime = dateTimeUTCNow;
       }
-
-      //(dateTimeUTCNow.operator-(DisplayOnTime).
-
-
-      //if (  dateTimeUTCNow   .operator-(DisplayOnTime)     // .operator-(TimeSpan(0,0,1,0))  ) 
-
+      
+      // every second check if a minute is elapsed, then actualize the time on the display
       if (millis() - previousDisplayTimeUpdateMillis > 1000)
       {
         DateTime localTime = myTimezone.toLocal(dateTimeUTCNow.unixtime());
@@ -763,26 +730,31 @@ void loop() {
           lcd_log_line(lineBuf);
         }
       }
-
+      
+      // if 5-way button is presses longer than 2 sec, toggle display (power/temperature)
       if (digitalRead(WIO_5S_PRESS) == LOW)    // Toggle between power screen and temp screen
       {
-        if (showPowerScreen)
-        {
-          showPowerScreen = false;
-          showDisplayFrame(TEMP_SENSOR_01_LABEL, TEMP_SENSOR_02_LABEL, TEMP_SENSOR_03_LABEL, TEMP_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);        
-        }
-        else
-        {
-          showPowerScreen = true;
-          showDisplayFrame(POWER_SENSOR_01_LABEL, POWER_SENSOR_02_LABEL, POWER_SENSOR_03_LABEL, POWER_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);        
-        }
-        fillDisplayFrame(ValueType::Power, 999.9, 999.9, 999.9, 999.9, false, false, false, false, false);
+        uint32_t startTime = millis(); 
+        // Wait until button released
+        while(digitalRead(WIO_5S_PRESS) == LOW);
 
-        //tft.setBacklight(0);
         backLight.setBrightness (maxBrightness);
         DisplayOnTime = dateTimeUTCNow;
-      // Wait until button released
-      while(digitalRead(WIO_5S_PRESS) == LOW);   
+
+        if ((millis() - startTime) > 2000)
+        {         
+          if (showPowerScreen)
+          {
+            showPowerScreen = false;
+            showDisplayFrame(TEMP_SENSOR_01_LABEL, TEMP_SENSOR_02_LABEL, TEMP_SENSOR_03_LABEL, TEMP_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);        
+          }
+          else
+          {
+            showPowerScreen = true;
+            showDisplayFrame(POWER_SENSOR_01_LABEL, POWER_SENSOR_02_LABEL, POWER_SENSOR_03_LABEL, POWER_SENSOR_04_LABEL, TFT_BLACK, TFT_BLACK, TFT_DARKGREY);        
+          }
+          fillDisplayFrame(ValueType::Power, 999.9, 999.9, 999.9, 999.9, false, false, false, false, false);
+        }
       }
   }
 }
@@ -950,10 +922,6 @@ void fillDisplayFrame(ValueType valueType, double an_1, double an_2, double an_3
 
     static uint8_t lastDateOutputMinute = 60;
 
-    static uint32_t lastTryUploadCtr = 0;
-
-    static bool lastSendResultState = false;
-    
     an_1 = constrain(an_1, -999.9, 50000.0);
     an_2 = constrain(an_2, -999.9, 50000.0);
     an_3 = constrain(an_3, -999.9, 50000.0);
@@ -1042,19 +1010,16 @@ void fillDisplayFrame(ValueType valueType, double an_1, double an_2, double an_3
     // Show signal circle on the screen, showing if no message was missed (green) or not (red)
     if (pLastMessageMissed)
     {
-      tft.fillCircle(300, 9, 8, TFT_RED);
-      lastSendResultState = true;          
+      tft.fillCircle(300, 9, 8, TFT_RED);              
     }
     else
     {
-      tft.fillCircle(300, 9, 8, TFT_DARKGREEN);
-      lastSendResultState = false;         
+      tft.fillCircle(300, 9, 8, TFT_DARKGREEN);           
     }       
 
     tft.fillRect(16, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_1 ? TFT_RED : TFT_DARKGREY);
     tft.fillRect(92, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_2 ? TFT_RED : TFT_DARKGREY);
     tft.fillRect(168, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_3 ? TFT_RED : TFT_DARKGREY);
     tft.fillRect(244, 12 * LCD_LINE_HEIGHT, 60, LCD_LINE_HEIGHT, on_4 ? TFT_RED : TFT_DARKGREY);
- 
 }
 
