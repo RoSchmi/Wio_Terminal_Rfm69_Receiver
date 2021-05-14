@@ -67,6 +67,15 @@ PowerVM powerVM;
 
 TFT_eSPI tft;
 
+#define Average_Window_Size 50
+
+uint32_t AverWinIndex = 0;
+int32_t NoiseValue    = 0;
+int32_t NoiseSum      = 0;
+int32_t NoiseAverage  = 0;
+int32_t NoiseReadings[Average_Window_Size];
+
+
 static LCDBackLight backLight;
 uint8_t maxBrightness = 0;
 
@@ -112,6 +121,7 @@ float powerDayMax = 0;
 
 DateTime BootTimeUtc = DateTime();
 DateTime DisplayOnTime = DateTime();
+DateTime DisplayOffTime = DateTime();
 
 char timeServer[] = "pool.ntp.org"; // external NTP server e.g. better pool.ntp.org
 unsigned int localPort = 2390;      // local port to listen for UDP packets
@@ -175,6 +185,7 @@ void lcd_log_line(char* line, uint32_t textCol = textColor, uint32_t backCol = b
 }
 
 // forward declarations
+void runWakeUpPerformance();
 unsigned long getNTPtime();
 unsigned long sendNTPpacket(const char* address);
 int16_2_float_function_result reform_uint16_2_float32(uint16_t u1, uint16_t u2);
@@ -422,6 +433,7 @@ if (!WiFi.enableSTA(true))
 
   BootTimeUtc = dateTimeUTCNow;
   DisplayOnTime = dateTimeUTCNow;
+  DisplayOffTime = dateTimeUTCNow;
   
   // RoSchmi for DST tests
   // dateTimeUTCNow = DateTime(2021, 10, 31, 1, 1, 0);
@@ -704,8 +716,18 @@ void loop() {
       // Time to reduce backlight has expired ?
       if ((dateTimeUTCNow.operator-(DisplayOnTime)).minutes() > SCREEN_OFF_TIME_MINUTES)
       {
-        backLight.setBrightness(maxBrightness / 20);
+        
         DisplayOnTime = dateTimeUTCNow;
+        if ((dateTimeUTCNow.operator-(DisplayOffTime)).minutes() > SCREEN_DARK_TIME_MINUTES)
+        {
+          backLight.setBrightness(maxBrightness / 40);          
+        }
+        else
+        {
+          backLight.setBrightness(maxBrightness / 20);         
+        }
+
+
       }
       
       // every second check if a minute is elapsed, then actualize the time on the display
@@ -755,8 +777,50 @@ void loop() {
           }
           fillDisplayFrame(ValueType::Power, 999.9, 999.9, 999.9, 999.9, false, false, false, false, false);
         }
+        if ((dateTimeUTCNow.operator-(DisplayOffTime)).minutes() > SCREEN_DARK_TIME_MINUTES)
+        {
+          runWakeUpPerformance();       
+        }
+        DisplayOffTime = dateTimeUTCNow;
       }
   }
+  else     // listen for noise in background to set backlight to max brightness
+  {
+    if (loopCounter % 200 == 0)    // read microphone every 200 th round
+    {
+      NoiseValue = analogRead(WIO_MIC);
+      NoiseSum = NoiseSum - NoiseReadings[AverWinIndex];
+      NoiseReadings[AverWinIndex] = NoiseValue;
+      NoiseSum += NoiseValue;
+      AverWinIndex = (AverWinIndex + 1) % Average_Window_Size;
+      NoiseAverage = NoiseSum / Average_Window_Size;
+
+      if (abs(NoiseValue - NoiseAverage) >  (NoiseAverage / 4))  // Set to max brightness if threshold exceeded
+      {
+        backLight.setBrightness (maxBrightness);
+        DisplayOnTime = dateTimeUTCNow;
+        if ((dateTimeUTCNow.operator-(DisplayOffTime)).minutes() > SCREEN_DARK_TIME_MINUTES)
+        {
+          runWakeUpPerformance();
+        }
+        DisplayOffTime = dateTimeUTCNow;
+
+        Serial.print(NoiseAverage);
+        Serial.print("  ");
+        //Serial.print(absValue);
+        Serial.print("  ");
+        Serial.println(NoiseValue);
+        volatile int dummy34 = 1;
+      }  
+    }
+  }
+}
+
+void runWakeUpPerformance(){
+
+  volatile int dummy8976 = 1;
+  dummy8976++;
+
 }
 
 // To manage daylightsavingstime stuff convert input ("Last", "First", "Second", "Third", "Fourth") to int equivalent
