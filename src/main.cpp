@@ -795,7 +795,7 @@ void loop() {
       AverWinIndex = (AverWinIndex + 1) % Average_Window_Size;
       NoiseAverage = NoiseSum / Average_Window_Size;
 
-      if (abs(NoiseValue - NoiseAverage) >  (NoiseAverage / 4))  // Set to max brightness if threshold exceeded
+      if (abs(NoiseValue - NoiseAverage) >  (NoiseAverage + NoiseAverage / 4))  // Set to max brightness if threshold exceeded
       {
         backLight.setBrightness (maxBrightness);
         DisplayOnTime = dateTimeUTCNow;
@@ -817,7 +817,7 @@ void loop() {
 }
 
 void runWakeUpPerformance(){
-
+  // Placeholder, Do wat you want
   volatile int dummy8976 = 1;
   dummy8976++;
 
