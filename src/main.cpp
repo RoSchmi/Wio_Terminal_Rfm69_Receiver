@@ -580,7 +580,8 @@ void loop() {
                   actDay = localTime.day();
                   powerDayMin = 50000;   // very high value
                   powerDayMax = 0;
-                  workAtStartOfDay = workAtStartOfDay < 0.0001 ? workInFloat.value : workAtStartOfDay;
+                  //workAtStartOfDay = workAtStartOfDay < 0.0001 ? workInFloat.value : workAtStartOfDay;
+                  workAtStartOfDay = workInFloat.value;
                   }
                     powerDayMin = powerInFloat < powerDayMin ? powerInFloat : powerDayMin;   // actualize day minimum power value
                     powerDayMax = powerInFloat > powerDayMax ? powerInFloat : powerDayMax;   // actualize day maximum power value
